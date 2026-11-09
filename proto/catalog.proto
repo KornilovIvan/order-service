@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package catalog.v1;
+
+option go_package = "order-service/internal/gen/catalog/v1;catalogv1";
+
+service Catalog {
+  rpc GetProduct(GetProductRequest) returns (GetProductResponse);
+}
+
+message GetProductRequest {
+  string id = 1;
+}
+
+message GetProductResponse {
+  Product product = 1;
+}
+
+message Product {
+  string id = 1;
+  string name = 2;
+  // price — десятичная строка с двумя знаками после запятой ("100.00").
+  // Строка, а не double: деньги не должны терять точность.
+  string price = 3;
+}
