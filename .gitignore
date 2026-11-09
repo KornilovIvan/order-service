@@ -1,0 +1,8 @@
+# Build output
+bin/
+
+# Local env
+.env
+
+# macOS
+.DS_Store
