@@ -38,6 +38,9 @@ func (h *Orders) Router() http.Handler {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/orders", h.create)
 		r.Get("/orders/{id}", h.get)
+		r.Post("/orders/{id}/confirm", h.confirm)
+		r.Post("/orders/{id}/resend", h.resend)
+		r.Post("/orders/{id}/cancel", h.cancel)
 	})
 
 	return r
@@ -132,9 +135,8 @@ func (h *Orders) create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Orders) get(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil || id <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid order id")
+	id, ok := orderIDFromRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -146,6 +148,64 @@ func (h *Orders) get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, toResponse(order))
+}
+
+func (h *Orders) confirm(w http.ResponseWriter, r *http.Request) {
+	id, ok := orderIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+
+	order, err := h.svc.Confirm(r.Context(), id)
+	h.writeTransition(w, id, order, err, service.ErrCannotConfirm, "cannot confirm")
+}
+
+func (h *Orders) resend(w http.ResponseWriter, r *http.Request) {
+	id, ok := orderIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+
+	order, err := h.svc.Resend(r.Context(), id)
+	h.writeTransition(w, id, order, err, service.ErrCannotResend, "cannot resend")
+}
+
+func (h *Orders) cancel(w http.ResponseWriter, r *http.Request) {
+	id, ok := orderIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+
+	order, err := h.svc.Cancel(r.Context(), id)
+	h.writeTransition(w, id, order, err, service.ErrCannotCancel, "cannot cancel")
+}
+
+// writeTransition — общий маппинг ошибок переходов состояний и вызовов ERP.
+func (h *Orders) writeTransition(w http.ResponseWriter, id int64, order model.Order, err error, conflictErr error, conflictMsg string) {
+	if err != nil {
+		switch {
+		case errors.Is(err, conflictErr):
+			writeError(w, http.StatusConflict, conflictMsg)
+		case errors.Is(err, service.ErrERPUnavailable):
+			log.Printf("handler: order %d: %v", id, err)
+			writeError(w, http.StatusBadGateway, "erp unavailable")
+		default:
+			log.Printf("handler: order %d: %v", id, err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toResponse(order))
+}
+
+func orderIDFromRequest(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid order id")
+		return 0, false
+	}
+	return id, true
 }
 
 func toResponse(order model.Order) orderResponse {

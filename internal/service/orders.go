@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 
 	"order-service/internal/catalog"
+	"order-service/internal/erp"
 	"order-service/internal/model"
 	"order-service/internal/repository"
 )
@@ -20,18 +22,32 @@ var (
 	ErrProductNotFound  = errors.New("product not found")
 )
 
+// Ошибки переходов состояний и интеграции с ERP.
+var (
+	ErrCannotConfirm   = errors.New("cannot confirm")
+	ErrCannotResend    = errors.New("cannot resend")
+	ErrCannotCancel    = errors.New("cannot cancel")
+	ErrERPUnavailable  = errors.New("erp unavailable")
+)
+
 // PriceProvider — источник цен. Реализуется клиентом каталога.
 type PriceProvider interface {
 	GetPrice(ctx context.Context, productID string) (string, error)
 }
 
+// ERPSubmitter — отправка заказа в ERP.
+type ERPSubmitter interface {
+	Submit(ctx context.Context, idempotencyKey string, req erp.SubmitRequest) (string, error)
+}
+
 type Orders struct {
 	repo    *repository.Orders
 	catalog PriceProvider
+	erp     ERPSubmitter
 }
 
-func NewOrders(repo *repository.Orders, prices PriceProvider) *Orders {
-	return &Orders{repo: repo, catalog: prices}
+func NewOrders(repo *repository.Orders, prices PriceProvider, erpClient ERPSubmitter) *Orders {
+	return &Orders{repo: repo, catalog: prices, erp: erpClient}
 }
 
 // CreateInput — входные данные создания заказа.
@@ -111,4 +127,91 @@ func (s *Orders) Get(ctx context.Context, id int64) (model.Order, error) {
 		return model.Order{}, err
 	}
 	return order, nil
+}
+
+// Confirm переводит заказ created → confirmed и отправляет его в ERP.
+//
+// Ключ идемпотентности и correlation_id генерируются один раз и сохраняются
+// в той же транзакции, что и смена статуса: повторный вызов или Resend
+// используют ровно тот же ключ.
+func (s *Orders) Confirm(ctx context.Context, orderID int64) (model.Order, error) {
+	key := uuid.NewString()
+	correlationID := uuid.NewString()
+
+	updated, err := s.repo.Confirm(ctx, orderID, key, correlationID)
+	if err != nil {
+		return model.Order{}, err
+	}
+	if !updated {
+		return model.Order{}, ErrCannotConfirm
+	}
+
+	order, err := s.repo.GetOrder(ctx, orderID)
+	if err != nil {
+		return model.Order{}, err
+	}
+
+	if err := s.submit(ctx, order, key); err != nil {
+		return model.Order{}, err
+	}
+	return s.repo.GetOrder(ctx, orderID)
+}
+
+// Resend повторяет отправку в ERP для заказа в статусе confirmed,
+// используя ранее сохранённый Idempotency-Key.
+func (s *Orders) Resend(ctx context.Context, orderID int64) (model.Order, error) {
+	state, err := s.repo.SubmitState(ctx, orderID)
+	if err != nil {
+		return model.Order{}, err
+	}
+	if state.Status != model.StatusConfirmed {
+		return model.Order{}, ErrCannotResend
+	}
+	if !state.IdempotencyKey.Valid || state.IdempotencyKey.String == "" {
+		return model.Order{}, fmt.Errorf("resend order %d: idempotency key is missing", orderID)
+	}
+
+	order, err := s.repo.GetOrder(ctx, orderID)
+	if err != nil {
+		return model.Order{}, err
+	}
+
+	if err := s.submit(ctx, order, state.IdempotencyKey.String); err != nil {
+		return model.Order{}, err
+	}
+	return s.repo.GetOrder(ctx, orderID)
+}
+
+// Cancel отменяет заказ из статусов created/confirmed.
+func (s *Orders) Cancel(ctx context.Context, orderID int64) (model.Order, error) {
+	updated, err := s.repo.Cancel(ctx, orderID)
+	if err != nil {
+		return model.Order{}, err
+	}
+	if !updated {
+		return model.Order{}, ErrCannotCancel
+	}
+	return s.repo.GetOrder(ctx, orderID)
+}
+
+// submit отправляет заказ в ERP и применяет результат:
+//   - 200/409 → submitted_to_erp (+ номер ERP);
+//   - 400/422 → failed;
+//   - временная ошибка → заказ остаётся confirmed, наружу возвращается
+//     ErrERPUnavailable (HTTP 502), повтор возможен через Resend.
+func (s *Orders) submit(ctx context.Context, order model.Order, idempotencyKey string) error {
+	req := erp.SubmitRequest{OrderID: order.ID, CustomerID: order.CustomerID}
+	for _, item := range order.Items {
+		req.Items = append(req.Items, erp.Item{ProductID: item.ProductID, Qty: item.Qty})
+	}
+
+	erpOrderID, err := s.erp.Submit(ctx, idempotencyKey, req)
+	switch {
+	case err == nil:
+		return s.repo.SetStatus(ctx, order.ID, model.StatusSubmittedToERP, erpOrderID)
+	case errors.Is(err, erp.ErrPermanent):
+		return s.repo.SetStatus(ctx, order.ID, model.StatusFailed, "")
+	default:
+		return fmt.Errorf("%w: %v", ErrERPUnavailable, err)
+	}
 }

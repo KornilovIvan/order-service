@@ -15,6 +15,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"order-service/internal/catalog"
+	"order-service/internal/erp"
 	"order-service/internal/handler"
 	"order-service/internal/repository"
 	"order-service/internal/service"
@@ -26,6 +27,8 @@ func main() {
 	dsn := envOr("DATABASE_URL", "postgres://orders:orders@localhost:5432/orders?sslmode=disable")
 	httpAddr := envOr("HTTP_ADDR", ":8080")
 	catalogAddr := envOr("CATALOG_GRPC_ADDR", "localhost:9091")
+	erpBaseURL := envOr("ERP_BASE_URL", "http://localhost:8081")
+	erpTimeout := durationEnv("ERP_TIMEOUT", 15*time.Second)
 
 	db, err := sqlx.Connect("pgx", dsn)
 	if err != nil {
@@ -39,7 +42,7 @@ func main() {
 	}
 	defer func() { _ = prices.Close() }()
 
-	svc := service.NewOrders(repository.NewOrders(db), prices)
+	svc := service.NewOrders(repository.NewOrders(db), prices, erp.New(erpBaseURL, erpTimeout))
 
 	srv := &http.Server{
 		Addr:              httpAddr,
@@ -51,7 +54,7 @@ func main() {
 	defer stop()
 
 	go func() {
-		log.Printf("api: listening on %s, catalog at %s", httpAddr, catalogAddr)
+		log.Printf("api: listening on %s, catalog at %s, erp at %s", httpAddr, catalogAddr, erpBaseURL)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("api: serve: %v", err)
 		}
@@ -72,4 +75,16 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func durationEnv(key string, fallback time.Duration) time.Duration {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return fallback
+	}
+	return d
 }

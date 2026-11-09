@@ -89,3 +89,92 @@ func (r *Orders) GetOrder(ctx context.Context, id int64) (model.Order, error) {
 	}
 	return order, nil
 }
+
+// Confirm переводит заказ created → confirmed, фиксируя ключ идемпотентности
+// и correlation_id. false — заказ не в статусе created (или его нет).
+func (r *Orders) Confirm(ctx context.Context, id int64, idempotencyKey, correlationID string) (bool, error) {
+	var updated bool
+	err := r.WithTx(ctx, func(tx *sqlx.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE orders
+			    SET status = 'confirmed', idempotency_key = $2, correlation_id = $3
+			  WHERE id = $1 AND status = 'created'`,
+			id, idempotencyKey, correlationID,
+		)
+		if err != nil {
+			return fmt.Errorf("confirm order: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("confirm order rows: %w", err)
+		}
+		updated = n == 1
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return updated, nil
+}
+
+// Cancel переводит заказ из created/confirmed в cancelled.
+// false — заказ в статусе, из которого отмена невозможна.
+func (r *Orders) Cancel(ctx context.Context, id int64) (bool, error) {
+	var updated bool
+	err := r.WithTx(ctx, func(tx *sqlx.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE orders SET status = 'cancelled'
+			  WHERE id = $1 AND status IN ('created', 'confirmed')`, id)
+		if err != nil {
+			return fmt.Errorf("cancel order: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("cancel order rows: %w", err)
+		}
+		updated = n == 1
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return updated, nil
+}
+
+// SubmitState — состояние заказа, нужное для отправки в ERP.
+type SubmitState struct {
+	Status         string         `db:"status"`
+	IdempotencyKey sql.NullString `db:"idempotency_key"`
+	CorrelationID  sql.NullString `db:"correlation_id"`
+	ERPOrderID     sql.NullString `db:"erp_order_id"`
+}
+
+// SubmitState читает статус и сохранённые идентификаторы отправки.
+func (r *Orders) SubmitState(ctx context.Context, id int64) (SubmitState, error) {
+	var st SubmitState
+	err := r.db.GetContext(ctx, &st,
+		`SELECT status, idempotency_key, correlation_id, erp_order_id FROM orders WHERE id = $1`, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SubmitState{}, ErrNotFound
+	}
+	if err != nil {
+		return SubmitState{}, fmt.Errorf("select submit state: %w", err)
+	}
+	return st, nil
+}
+
+// SetStatus меняет статус и (если задан) номер заказа в ERP.
+// Пустой erpOrderID сохраняет прежнее значение.
+func (r *Orders) SetStatus(ctx context.Context, id int64, status, erpOrderID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE orders
+		    SET status = $2,
+		        erp_order_id = COALESCE(NULLIF($3, ''), erp_order_id)
+		  WHERE id = $1`,
+		id, status, erpOrderID,
+	)
+	if err != nil {
+		return fmt.Errorf("set status %q: %w", status, err)
+	}
+	return nil
+}
