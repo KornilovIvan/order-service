@@ -24,10 +24,10 @@ var (
 
 // Ошибки переходов состояний и интеграции с ERP.
 var (
-	ErrCannotConfirm   = errors.New("cannot confirm")
-	ErrCannotResend    = errors.New("cannot resend")
-	ErrCannotCancel    = errors.New("cannot cancel")
-	ErrERPUnavailable  = errors.New("erp unavailable")
+	ErrCannotConfirm  = errors.New("cannot confirm")
+	ErrCannotResend   = errors.New("cannot resend")
+	ErrCannotCancel   = errors.New("cannot cancel")
+	ErrERPUnavailable = errors.New("erp unavailable")
 )
 
 // PriceProvider — источник цен. Реализуется клиентом каталога.

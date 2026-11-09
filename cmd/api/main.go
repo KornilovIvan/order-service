@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"order-service/internal/catalog"
 	"order-service/internal/erp"
 	"order-service/internal/handler"
+	"order-service/internal/publisher"
 	"order-service/internal/repository"
 	"order-service/internal/service"
 )
@@ -42,7 +44,17 @@ func main() {
 	}
 	defer func() { _ = prices.Close() }()
 
-	svc := service.NewOrders(repository.NewOrders(db), prices, erp.New(erpBaseURL, erpTimeout))
+	repo := repository.NewOrders(db)
+
+	kafkaAddrs := strings.Split(envOr("KAFKA_ADDR", "localhost:19092"), ",")
+	kafkaTopic := envOr("KAFKA_TOPIC", publisher.EventOrderCreated)
+	pollInterval := durationEnv("POLL_INTERVAL", time.Second)
+
+	events := publisher.New(kafkaAddrs, kafkaTopic)
+	defer func() { _ = events.Close() }()
+	eventsWorker := publisher.NewWorker(repo, events, pollInterval, 50)
+
+	svc := service.NewOrders(repo, prices, erp.New(erpBaseURL, erpTimeout))
 
 	srv := &http.Server{
 		Addr:              httpAddr,
@@ -53,8 +65,15 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	workerDone := make(chan struct{})
 	go func() {
-		log.Printf("api: listening on %s, catalog at %s, erp at %s", httpAddr, catalogAddr, erpBaseURL)
+		defer close(workerDone)
+		eventsWorker.Run(ctx)
+	}()
+
+	go func() {
+		log.Printf("api: listening on %s, catalog at %s, erp at %s, kafka %s/%s",
+			httpAddr, catalogAddr, erpBaseURL, strings.Join(kafkaAddrs, ","), kafkaTopic)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("api: serve: %v", err)
 		}
@@ -68,6 +87,9 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("api: shutdown: %v", err)
 	}
+
+	// Ждём завершения публикатора: он останавливается по отмене ctx.
+	<-workerDone
 }
 
 func envOr(key, fallback string) string {

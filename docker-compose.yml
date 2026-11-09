@@ -29,5 +29,20 @@ services:
       - "-database=postgres://orders:orders@postgres:5432/orders?sslmode=disable"
       - "up"
 
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    profiles: ["tools"]
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:19092
+      - --advertise-kafka-addr=PLAINTEXT://localhost:19092
+    ports:
+      - "19092:19092"
+
 volumes:
   pgdata:

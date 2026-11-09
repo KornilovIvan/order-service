@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
@@ -175,6 +176,49 @@ func (r *Orders) SetStatus(ctx context.Context, id int64, status, erpOrderID str
 	)
 	if err != nil {
 		return fmt.Errorf("set status %q: %w", status, err)
+	}
+	return nil
+}
+
+// PendingPublish возвращает заказы, по которым ещё не опубликовано событие.
+func (r *Orders) PendingPublish(ctx context.Context, limit int) ([]model.PendingPublish, error) {
+	var rows []struct {
+		ID            int64          `db:"id"`
+		CorrelationID sql.NullString `db:"correlation_id"`
+	}
+
+	err := r.db.SelectContext(ctx, &rows,
+		`SELECT id, correlation_id
+		   FROM orders
+		  WHERE published_at IS NULL
+		    AND status NOT IN ('created', 'cancelled')
+		    AND idempotency_key IS NOT NULL
+		  ORDER BY id
+		  LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("select pending publish: %w", err)
+	}
+
+	out := make([]model.PendingPublish, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, model.PendingPublish{ID: row.ID, CorrelationID: row.CorrelationID.String})
+	}
+	return out, nil
+}
+
+// MarkPublished проставляет published_at опубликованным заказам.
+func (r *Orders) MarkPublished(ctx context.Context, ids []int64, at time.Time) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	query, args, err := sqlx.In(
+		`UPDATE orders SET published_at = ? WHERE id IN (?) AND published_at IS NULL`, at, ids)
+	if err != nil {
+		return fmt.Errorf("build mark published: %w", err)
+	}
+	if _, err := r.db.ExecContext(ctx, r.db.Rebind(query), args...); err != nil {
+		return fmt.Errorf("mark published: %w", err)
 	}
 	return nil
 }

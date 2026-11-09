@@ -20,6 +20,12 @@ type Order struct {
 	Items      []OrderItem `db:"-"`
 }
 
+// PendingPublish — заказ, ожидающий публикации события.
+type PendingPublish struct {
+	ID            int64
+	CorrelationID string
+}
+
 // OrderItem — позиция заказа.
 // Цена намеренно не хранится: она запрашивается у каталога и не копируется.
 type OrderItem struct {
