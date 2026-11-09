@@ -1,0 +1,3 @@
+ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_type_check;
+ALTER TABLE orders DROP COLUMN IF EXISTS delivery_date;
+ALTER TABLE orders DROP COLUMN IF EXISTS order_type;

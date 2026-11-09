@@ -12,12 +12,20 @@ const (
 	StatusFailed         = "failed"
 )
 
+// Типы заказа. Совпадают с CHECK-ограничением orders_type_check.
+const (
+	OrderTypeRegular  = "regular"
+	OrderTypePreorder = "preorder"
+)
+
 type Order struct {
-	ID         int64       `db:"id"`
-	CustomerID int64       `db:"customer_id"`
-	Status     string      `db:"status"`
-	CreatedAt  time.Time   `db:"created_at"`
-	Items      []OrderItem `db:"-"`
+	ID           int64       `db:"id"`
+	CustomerID   int64       `db:"customer_id"`
+	Status       string      `db:"status"`
+	OrderType    string      `db:"order_type"`
+	DeliveryDate *time.Time  `db:"delivery_date"`
+	CreatedAt    time.Time   `db:"created_at"`
+	Items        []OrderItem `db:"-"`
 }
 
 // PendingPublish — заказ, ожидающий публикации события.

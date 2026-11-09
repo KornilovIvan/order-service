@@ -21,6 +21,9 @@ type Orders struct {
 	svc *service.Orders
 }
 
+// deliveryDateLayout — формат даты без времени (тип date в PostgreSQL).
+const deliveryDateLayout = "2006-01-02"
+
 func NewOrders(svc *service.Orders) *Orders {
 	return &Orders{svc: svc}
 }
@@ -48,8 +51,10 @@ func (h *Orders) Router() http.Handler {
 
 // createOrderRequest — тело POST /api/v1/orders.
 type createOrderRequest struct {
-	CustomerID int64             `json:"customer_id"`
-	Items      []createOrderItem `json:"items"`
+	CustomerID   int64             `json:"customer_id"`
+	OrderType    string            `json:"order_type"`
+	DeliveryDate *string           `json:"delivery_date"`
+	Items        []createOrderItem `json:"items"`
 }
 
 type createOrderItem struct {
@@ -84,11 +89,13 @@ func (p *productID) UnmarshalJSON(data []byte) error {
 
 // orderResponse — форма заказа в ответе. Цены здесь нет: она не копируется.
 type orderResponse struct {
-	ID         int64               `json:"id"`
-	CustomerID int64               `json:"customer_id"`
-	Status     string              `json:"status"`
-	CreatedAt  time.Time           `json:"created_at"`
-	Items      []orderItemResponse `json:"items"`
+	ID           int64               `json:"id"`
+	CustomerID   int64               `json:"customer_id"`
+	Status       string              `json:"status"`
+	OrderType    string              `json:"order_type"`
+	DeliveryDate *string             `json:"delivery_date"`
+	CreatedAt    time.Time           `json:"created_at"`
+	Items        []orderItemResponse `json:"items"`
 }
 
 type orderItemResponse struct {
@@ -105,7 +112,20 @@ func (h *Orders) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	in := service.CreateInput{CustomerID: req.CustomerID}
+	in := service.CreateInput{
+		CustomerID: req.CustomerID,
+		OrderType:  strings.TrimSpace(req.OrderType),
+	}
+
+	if req.DeliveryDate != nil && strings.TrimSpace(*req.DeliveryDate) != "" {
+		parsed, err := time.Parse(deliveryDateLayout, strings.TrimSpace(*req.DeliveryDate))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid delivery_date: want YYYY-MM-DD")
+			return
+		}
+		in.DeliveryDate = &parsed
+	}
+
 	for _, item := range req.Items {
 		in.Items = append(in.Items, service.CreateItem{
 			ProductID: string(item.ProductID),
@@ -124,6 +144,10 @@ func (h *Orders) create(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "items must not be empty")
 		case errors.Is(err, service.ErrInvalidQty):
 			writeError(w, http.StatusBadRequest, "qty must be >= 1")
+		case errors.Is(err, service.ErrInvalidOrderType):
+			writeError(w, http.StatusBadRequest, "invalid order_type: want regular or preorder")
+		case errors.Is(err, service.ErrPreorderWithoutDate):
+			writeError(w, http.StatusBadRequest, "delivery_date is required for preorder")
 		default:
 			log.Printf("handler: create order: %v", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
@@ -142,6 +166,10 @@ func (h *Orders) get(w http.ResponseWriter, r *http.Request) {
 
 	order, err := h.svc.Get(r.Context(), id)
 	if err != nil {
+		if errors.Is(err, service.ErrOrderNotFound) {
+			writeError(w, http.StatusNotFound, "order not found")
+			return
+		}
 		log.Printf("handler: get order %d: %v", id, err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
@@ -213,12 +241,21 @@ func toResponse(order model.Order) orderResponse {
 	for _, item := range order.Items {
 		items = append(items, orderItemResponse{ProductID: item.ProductID, Qty: item.Qty})
 	}
+
+	var deliveryDate *string
+	if order.DeliveryDate != nil {
+		formatted := order.DeliveryDate.Format(deliveryDateLayout)
+		deliveryDate = &formatted
+	}
+
 	return orderResponse{
-		ID:         order.ID,
-		CustomerID: order.CustomerID,
-		Status:     order.Status,
-		CreatedAt:  order.CreatedAt,
-		Items:      items,
+		ID:           order.ID,
+		CustomerID:   order.CustomerID,
+		Status:       order.Status,
+		OrderType:    order.OrderType,
+		DeliveryDate: deliveryDate,
+		CreatedAt:    order.CreatedAt,
+		Items:        items,
 	}
 }
 

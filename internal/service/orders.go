@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -16,10 +17,12 @@ import (
 
 // Ошибки бизнес-валидации. Все они превращаются в HTTP 400.
 var (
-	ErrNoItems          = errors.New("items must not be empty")
-	ErrInvalidQty       = errors.New("qty must be >= 1")
-	ErrCustomerNotFound = errors.New("customer not found")
-	ErrProductNotFound  = errors.New("product not found")
+	ErrNoItems             = errors.New("items must not be empty")
+	ErrInvalidQty          = errors.New("qty must be >= 1")
+	ErrCustomerNotFound    = errors.New("customer not found")
+	ErrProductNotFound     = errors.New("product not found")
+	ErrInvalidOrderType    = errors.New("invalid order type")
+	ErrPreorderWithoutDate = errors.New("delivery_date is required for preorder")
 )
 
 // Ошибки переходов состояний и интеграции с ERP.
@@ -28,6 +31,7 @@ var (
 	ErrCannotResend   = errors.New("cannot resend")
 	ErrCannotCancel   = errors.New("cannot cancel")
 	ErrERPUnavailable = errors.New("erp unavailable")
+	ErrOrderNotFound  = errors.New("order not found")
 )
 
 // PriceProvider — источник цен. Реализуется клиентом каталога.
@@ -52,8 +56,10 @@ func NewOrders(repo *repository.Orders, prices PriceProvider, erpClient ERPSubmi
 
 // CreateInput — входные данные создания заказа.
 type CreateInput struct {
-	CustomerID int64
-	Items      []CreateItem
+	CustomerID   int64
+	OrderType    string
+	DeliveryDate *time.Time
+	Items        []CreateItem
 }
 
 // CreateItem — позиция заказа на входе.
@@ -74,6 +80,17 @@ func (s *Orders) Create(ctx context.Context, in CreateInput) (model.Order, error
 		}
 	}
 
+	orderType := in.OrderType
+	if orderType == "" {
+		orderType = model.OrderTypeRegular
+	}
+	if orderType != model.OrderTypeRegular && orderType != model.OrderTypePreorder {
+		return model.Order{}, ErrInvalidOrderType
+	}
+	if orderType == model.OrderTypePreorder && in.DeliveryDate == nil {
+		return model.Order{}, ErrPreorderWithoutDate
+	}
+
 	var orderID int64
 	err := s.repo.WithTx(ctx, func(tx *sqlx.Tx) error {
 		exists, err := s.repo.CustomerExists(ctx, tx, in.CustomerID)
@@ -84,7 +101,7 @@ func (s *Orders) Create(ctx context.Context, in CreateInput) (model.Order, error
 			return ErrCustomerNotFound
 		}
 
-		id, err := s.repo.InsertOrder(ctx, tx, in.CustomerID)
+		id, err := s.repo.InsertOrder(ctx, tx, in.CustomerID, orderType, in.DeliveryDate)
 		if err != nil {
 			return err
 		}
@@ -117,11 +134,11 @@ func (s *Orders) Create(ctx context.Context, in CreateInput) (model.Order, error
 	return created, nil
 }
 
-// Get возвращает заказ по идентификатору.
+// Get возвращает заказ по идентификатору. ErrOrderNotFound — заказа нет.
 func (s *Orders) Get(ctx context.Context, id int64) (model.Order, error) {
 	order, err := s.repo.GetOrder(ctx, id)
 	if errors.Is(err, repository.ErrNotFound) {
-		return model.Order{}, nil
+		return model.Order{}, ErrOrderNotFound
 	}
 	if err != nil {
 		return model.Order{}, err

@@ -51,9 +51,12 @@ func (r *Orders) CustomerExists(ctx context.Context, tx *sqlx.Tx, id int64) (boo
 }
 
 // InsertOrder создаёт заказ со статусом по умолчанию ('created').
-func (r *Orders) InsertOrder(ctx context.Context, tx *sqlx.Tx, customerID int64) (int64, error) {
+func (r *Orders) InsertOrder(ctx context.Context, tx *sqlx.Tx, customerID int64, orderType string, deliveryDate *time.Time) (int64, error) {
 	var id int64
-	err := tx.GetContext(ctx, &id, `INSERT INTO orders (customer_id) VALUES ($1) RETURNING id`, customerID)
+	err := tx.GetContext(ctx, &id,
+		`INSERT INTO orders (customer_id, order_type, delivery_date) VALUES ($1, $2, $3) RETURNING id`,
+		customerID, orderType, deliveryDate,
+	)
 	if err != nil {
 		return 0, fmt.Errorf("insert order: %w", err)
 	}
@@ -76,7 +79,7 @@ func (r *Orders) InsertItem(ctx context.Context, tx *sqlx.Tx, orderID int64, pro
 func (r *Orders) GetOrder(ctx context.Context, id int64) (model.Order, error) {
 	var order model.Order
 	err := r.db.GetContext(ctx, &order,
-		`SELECT id, customer_id, status, created_at FROM orders WHERE id = $1`, id)
+		`SELECT id, customer_id, status, order_type, delivery_date, created_at FROM orders WHERE id = $1`, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Order{}, ErrNotFound
 	}
