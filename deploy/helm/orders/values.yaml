@@ -9,6 +9,8 @@ image:
 env:
   HTTP_ADDR: ":8080"
   CATALOG_GRPC_ADDR: "catalogfake:9091"
+  REDIS_ADDR: "redis:6379"
+  PRICE_CACHE_TTL: "60s"
   ERP_BASE_URL: "http://erpfake:8081"
   KAFKA_ADDR: "redpanda:19092"
   KAFKA_TOPIC: "order.created"

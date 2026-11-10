@@ -14,6 +14,7 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx"
+	"github.com/redis/go-redis/v9"
 
 	"order-service/internal/catalog"
 	"order-service/internal/erp"
@@ -29,6 +30,8 @@ func main() {
 	dsn := envOr("DATABASE_URL", "postgres://orders:orders@localhost:5432/orders?sslmode=disable")
 	httpAddr := envOr("HTTP_ADDR", ":8080")
 	catalogAddr := envOr("CATALOG_GRPC_ADDR", "localhost:9091")
+	redisAddr := envOr("REDIS_ADDR", "localhost:6379")
+	priceCacheTTL := durationEnv("PRICE_CACHE_TTL", 60*time.Second)
 	erpBaseURL := envOr("ERP_BASE_URL", "http://localhost:8081")
 	erpTimeout := durationEnv("ERP_TIMEOUT", 15*time.Second)
 
@@ -44,6 +47,16 @@ func main() {
 	}
 	defer func() { _ = prices.Close() }()
 
+	rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
+	defer func() { _ = rdb.Close() }()
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	if err := rdb.Ping(pingCtx).Err(); err != nil {
+		pingCancel()
+		log.Fatalf("api: redis %s: %v", redisAddr, err)
+	}
+	pingCancel()
+	priceCache := catalog.NewPriceCache(prices, rdb, priceCacheTTL)
+
 	repo := repository.NewOrders(db)
 
 	kafkaAddrs := strings.Split(envOr("KAFKA_ADDR", "localhost:19092"), ",")
@@ -54,7 +67,7 @@ func main() {
 	defer func() { _ = events.Close() }()
 	eventsWorker := publisher.NewWorker(repo, events, pollInterval, 50)
 
-	svc := service.NewOrders(repo, prices, erp.New(erpBaseURL, erpTimeout))
+	svc := service.NewOrders(repo, priceCache, erp.New(erpBaseURL, erpTimeout))
 
 	srv := &http.Server{
 		Addr:              httpAddr,
@@ -72,8 +85,8 @@ func main() {
 	}()
 
 	go func() {
-		log.Printf("api: listening on %s, catalog at %s, erp at %s, kafka %s/%s",
-			httpAddr, catalogAddr, erpBaseURL, strings.Join(kafkaAddrs, ","), kafkaTopic)
+		log.Printf("api: listening on %s, catalog at %s, redis at %s (price ttl %s), erp at %s, kafka %s/%s",
+			httpAddr, catalogAddr, redisAddr, priceCacheTTL, erpBaseURL, strings.Join(kafkaAddrs, ","), kafkaTopic)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("api: serve: %v", err)
 		}

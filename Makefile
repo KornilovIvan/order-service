@@ -10,7 +10,7 @@ PROTO_SRC ?= catalog.proto
 .PHONY: up down migrate-up migrate-down proto
 
 up:
-	$(COMPOSE) --profile $(PROFILE) up -d postgres
+	$(COMPOSE) --profile $(PROFILE) up -d postgres redis
 
 down:
 	$(COMPOSE) --profile $(PROFILE) down

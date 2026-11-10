@@ -29,6 +29,12 @@ services:
       - "-database=postgres://orders:orders@postgres:5432/orders?sslmode=disable"
       - "up"
 
+  redis:
+    image: redis:7-alpine
+    profiles: ["tools"]
+    ports:
+      - "6379:6379"
+
   redpanda:
     image: redpandadata/redpanda:v24.2.7
     profiles: ["tools"]
