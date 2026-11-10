@@ -35,10 +35,12 @@ type PendingPublish struct {
 }
 
 // OrderItem — позиция заказа.
-// Цена намеренно не хранится: она запрашивается у каталога и не копируется.
+// PriceAtOrder — цена из каталога на момент создания заказа.
+// Дальнейшие изменения цены в каталоге на эту строку не влияют.
 type OrderItem struct {
-	ID        int64  `db:"id"`
-	OrderID   int64  `db:"order_id"`
-	ProductID string `db:"product_id"`
-	Qty       int    `db:"qty"`
+	ID           int64  `db:"id"`
+	OrderID      int64  `db:"order_id"`
+	ProductID    string `db:"product_id"`
+	Qty          int    `db:"qty"`
+	PriceAtOrder string `db:"price_at_order"`
 }

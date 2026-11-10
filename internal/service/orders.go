@@ -108,15 +108,16 @@ func (s *Orders) Create(ctx context.Context, in CreateInput) (model.Order, error
 		orderID = id
 
 		for _, item := range in.Items {
-			// Цена запрашивается у каталога только для проверки товара
-			// и намеренно НЕ копируется в заказ.
-			if _, err := s.catalog.GetPrice(ctx, item.ProductID); err != nil {
+			// Цена фиксируется в той же транзакции, что и шапка заказа:
+			// сбой каталога или вставки откатывает заказ целиком.
+			price, err := s.catalog.GetPrice(ctx, item.ProductID)
+			if err != nil {
 				if errors.Is(err, catalog.ErrNotFound) {
 					return ErrProductNotFound
 				}
 				return fmt.Errorf("get price for %q: %w", item.ProductID, err)
 			}
-			if err := s.repo.InsertItem(ctx, tx, id, item.ProductID, item.Qty); err != nil {
+			if err := s.repo.InsertItem(ctx, tx, id, item.ProductID, item.Qty, price); err != nil {
 				return err
 			}
 		}

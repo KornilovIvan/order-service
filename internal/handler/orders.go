@@ -87,7 +87,7 @@ func (p *productID) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// orderResponse — форма заказа в ответе. Цены здесь нет: она не копируется.
+// orderResponse — форма заказа в ответе.
 type orderResponse struct {
 	ID           int64               `json:"id"`
 	CustomerID   int64               `json:"customer_id"`
@@ -99,8 +99,9 @@ type orderResponse struct {
 }
 
 type orderItemResponse struct {
-	ProductID string `json:"product_id"`
-	Qty       int    `json:"qty"`
+	ProductID    string `json:"product_id"`
+	Qty          int    `json:"qty"`
+	PriceAtOrder string `json:"price_at_order"`
 }
 
 func (h *Orders) create(w http.ResponseWriter, r *http.Request) {
@@ -239,7 +240,11 @@ func orderIDFromRequest(w http.ResponseWriter, r *http.Request) (int64, bool) {
 func toResponse(order model.Order) orderResponse {
 	items := make([]orderItemResponse, 0, len(order.Items))
 	for _, item := range order.Items {
-		items = append(items, orderItemResponse{ProductID: item.ProductID, Qty: item.Qty})
+		items = append(items, orderItemResponse{
+			ProductID:    item.ProductID,
+			Qty:          item.Qty,
+			PriceAtOrder: item.PriceAtOrder,
+		})
 	}
 
 	var deliveryDate *string

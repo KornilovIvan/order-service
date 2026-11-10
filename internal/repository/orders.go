@@ -63,11 +63,11 @@ func (r *Orders) InsertOrder(ctx context.Context, tx *sqlx.Tx, customerID int64,
 	return id, nil
 }
 
-// InsertItem добавляет позицию заказа.
-func (r *Orders) InsertItem(ctx context.Context, tx *sqlx.Tx, orderID int64, productID string, qty int) error {
+// InsertItem добавляет позицию заказа вместе с ценой на момент создания.
+func (r *Orders) InsertItem(ctx context.Context, tx *sqlx.Tx, orderID int64, productID string, qty int, priceAtOrder string) error {
 	_, err := tx.ExecContext(ctx,
-		`INSERT INTO order_items (order_id, product_id, qty) VALUES ($1, $2, $3)`,
-		orderID, productID, qty,
+		`INSERT INTO order_items (order_id, product_id, qty, price_at_order) VALUES ($1, $2, $3, $4)`,
+		orderID, productID, qty, priceAtOrder,
 	)
 	if err != nil {
 		return fmt.Errorf("insert item %q: %w", productID, err)
@@ -88,7 +88,8 @@ func (r *Orders) GetOrder(ctx context.Context, id int64) (model.Order, error) {
 	}
 
 	if err := r.db.SelectContext(ctx, &order.Items,
-		`SELECT id, order_id, product_id, qty FROM order_items WHERE order_id = $1 ORDER BY id`, id); err != nil {
+		`SELECT id, order_id, product_id, qty, price_at_order::text AS price_at_order
+		   FROM order_items WHERE order_id = $1 ORDER BY id`, id); err != nil {
 		return model.Order{}, fmt.Errorf("select items: %w", err)
 	}
 	return order, nil
