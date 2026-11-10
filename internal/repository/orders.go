@@ -95,6 +95,49 @@ func (r *Orders) GetOrder(ctx context.Context, id int64) (model.Order, error) {
 	return order, nil
 }
 
+// ListByCustomerStatus возвращает до limit заказов клиента в заданном статусе,
+// сначала самые новые. Порядок совпадает с orders_customer_status_created_idx.
+func (r *Orders) ListByCustomerStatus(ctx context.Context, customerID int64, status string, limit int) ([]model.Order, error) {
+	var orders []model.Order
+	err := r.db.SelectContext(ctx, &orders,
+		`SELECT id, customer_id, status, order_type, delivery_date, created_at
+		   FROM orders
+		  WHERE customer_id = $1 AND status = $2
+		  ORDER BY created_at DESC
+		  LIMIT $3`, customerID, status, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list orders: %w", err)
+	}
+	if len(orders) == 0 {
+		return []model.Order{}, nil
+	}
+
+	ids := make([]int64, len(orders))
+	byID := make(map[int64]*model.Order, len(orders))
+	for i := range orders {
+		ids[i] = orders[i].ID
+		orders[i].Items = []model.OrderItem{}
+		byID[orders[i].ID] = &orders[i]
+	}
+
+	query, args, err := sqlx.In(
+		`SELECT id, order_id, product_id, qty, price_at_order::text AS price_at_order
+		   FROM order_items
+		  WHERE order_id IN (?)
+		  ORDER BY id`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list order items: %w", err)
+	}
+	var items []model.OrderItem
+	if err := r.db.SelectContext(ctx, &items, r.db.Rebind(query), args...); err != nil {
+		return nil, fmt.Errorf("list order items: %w", err)
+	}
+	for _, item := range items {
+		byID[item.OrderID].Items = append(byID[item.OrderID].Items, item)
+	}
+	return orders, nil
+}
+
 // Confirm переводит заказ created → confirmed, фиксируя ключ идемпотентности
 // и correlation_id. false — заказ не в статусе created (или его нет).
 func (r *Orders) Confirm(ctx context.Context, id int64, idempotencyKey, correlationID string) (bool, error) {

@@ -40,6 +40,7 @@ func (h *Orders) Router() http.Handler {
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Post("/orders", h.create)
+		r.Get("/orders", h.list)
 		r.Get("/orders/{id}", h.get)
 		r.Post("/orders/{id}/confirm", h.confirm)
 		r.Post("/orders/{id}/resend", h.resend)
@@ -158,6 +159,34 @@ func (h *Orders) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, toResponse(order))
+}
+
+func (h *Orders) list(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	rawCustomerID := strings.TrimSpace(q.Get("customer_id"))
+	status := strings.TrimSpace(q.Get("status"))
+	if rawCustomerID == "" || status == "" {
+		writeError(w, http.StatusBadRequest, "customer_id and status are required")
+		return
+	}
+	customerID, err := strconv.ParseInt(rawCustomerID, 10, 64)
+	if err != nil || customerID <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid customer_id")
+		return
+	}
+
+	orders, err := h.svc.List(r.Context(), customerID, status)
+	if err != nil {
+		log.Printf("handler: list orders: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	resp := make([]orderResponse, 0, len(orders))
+	for _, order := range orders {
+		resp = append(resp, toResponse(order))
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Orders) get(w http.ResponseWriter, r *http.Request) {

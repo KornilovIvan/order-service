@@ -137,6 +137,15 @@ func (s *Orders) Create(ctx context.Context, in CreateInput) (model.Order, error
 	return created, nil
 }
 
+// listLimit — сколько заказов отдаёт список клиента в одном статусе.
+const listLimit = 50
+
+// List возвращает не больше listLimit заказов клиента в указанном статусе,
+// от новых к старым.
+func (s *Orders) List(ctx context.Context, customerID int64, status string) ([]model.Order, error) {
+	return s.repo.ListByCustomerStatus(ctx, customerID, status, listLimit)
+}
+
 // Get возвращает заказ по идентификатору. ErrOrderNotFound — заказа нет.
 func (s *Orders) Get(ctx context.Context, id int64) (model.Order, error) {
 	order, err := s.repo.GetOrder(ctx, id)
