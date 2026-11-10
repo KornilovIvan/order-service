@@ -122,8 +122,35 @@ func (r *Orders) Confirm(ctx context.Context, id int64, idempotencyKey, correlat
 	return updated, nil
 }
 
+// Retry переводит failed → confirmed и заменяет ключ идемпотентности.
+// false — заказ не в статусе failed (или его нет): новый ключ не сохранён.
+func (r *Orders) Retry(ctx context.Context, id int64, idempotencyKey, correlationID string) (bool, error) {
+	var updated bool
+	err := r.WithTx(ctx, func(tx *sqlx.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE orders
+			    SET status = 'confirmed', idempotency_key = $2, correlation_id = $3
+			  WHERE id = $1 AND status = 'failed'`,
+			id, idempotencyKey, correlationID,
+		)
+		if err != nil {
+			return fmt.Errorf("retry order: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("retry order rows: %w", err)
+		}
+		updated = n == 1
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return updated, nil
+}
+
 // Cancel переводит заказ из created/confirmed в cancelled.
-// false — заказ в статусе, из которого отмена невозможна.
+// false — статус уже сменился (или заказа нет).
 func (r *Orders) Cancel(ctx context.Context, id int64) (bool, error) {
 	var updated bool
 	err := r.WithTx(ctx, func(tx *sqlx.Tx) error {
@@ -136,6 +163,30 @@ func (r *Orders) Cancel(ctx context.Context, id int64) (bool, error) {
 		n, err := res.RowsAffected()
 		if err != nil {
 			return fmt.Errorf("cancel order rows: %w", err)
+		}
+		updated = n == 1
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return updated, nil
+}
+
+// CancelFailed переводит failed → cancelled и не меняет ключ идемпотентности.
+// false — заказ уже не в статусе failed.
+func (r *Orders) CancelFailed(ctx context.Context, id int64) (bool, error) {
+	var updated bool
+	err := r.WithTx(ctx, func(tx *sqlx.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE orders SET status = 'cancelled'
+			  WHERE id = $1 AND status = 'failed'`, id)
+		if err != nil {
+			return fmt.Errorf("cancel failed order: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("cancel failed order rows: %w", err)
 		}
 		updated = n == 1
 		return nil
@@ -170,10 +221,11 @@ func (r *Orders) SubmitState(ctx context.Context, id int64) (SubmitState, error)
 
 // SetStatus меняет статус и (если задан) номер заказа в ERP.
 // Пустой erpOrderID сохраняет прежнее значение.
+// Уже отменённый заказ не возвращается в другой статус: пишется только erp_order_id.
 func (r *Orders) SetStatus(ctx context.Context, id int64, status, erpOrderID string) error {
 	_, err := r.db.ExecContext(ctx,
 		`UPDATE orders
-		    SET status = $2,
+		    SET status = CASE WHEN status = 'cancelled' THEN status ELSE $2 END,
 		        erp_order_id = COALESCE(NULLIF($3, ''), erp_order_id)
 		  WHERE id = $1`,
 		id, status, erpOrderID,

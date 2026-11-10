@@ -27,11 +27,13 @@ var (
 
 // Ошибки переходов состояний и интеграции с ERP.
 var (
-	ErrCannotConfirm  = errors.New("cannot confirm")
-	ErrCannotResend   = errors.New("cannot resend")
-	ErrCannotCancel   = errors.New("cannot cancel")
-	ErrERPUnavailable = errors.New("erp unavailable")
-	ErrOrderNotFound  = errors.New("order not found")
+	ErrCannotConfirm    = errors.New("cannot confirm")
+	ErrCannotResend     = errors.New("cannot resend")
+	ErrCannotRetry      = errors.New("cannot retry")
+	ErrCannotCancel     = errors.New("cannot cancel")
+	ErrCancelNotAllowed = errors.New("cancel not allowed")
+	ErrERPUnavailable   = errors.New("erp unavailable")
+	ErrOrderNotFound    = errors.New("order not found")
 )
 
 // PriceProvider — источник цен. Реализуется клиентом каталога.
@@ -180,9 +182,12 @@ func (s *Orders) Confirm(ctx context.Context, orderID int64) (model.Order, error
 func (s *Orders) Resend(ctx context.Context, orderID int64) (model.Order, error) {
 	state, err := s.repo.SubmitState(ctx, orderID)
 	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return model.Order{}, ErrOrderNotFound
+		}
 		return model.Order{}, err
 	}
-	if state.Status != model.StatusConfirmed {
+	if !allow(state.Status, actionResend) {
 		return model.Order{}, ErrCannotResend
 	}
 	if !state.IdempotencyKey.Valid || state.IdempotencyKey.String == "" {
@@ -200,9 +205,52 @@ func (s *Orders) Resend(ctx context.Context, orderID int64) (model.Order, error)
 	return s.repo.GetOrder(ctx, orderID)
 }
 
-// Cancel отменяет заказ из статусов created/confirmed.
+// Retry заново отправляет в ERP заказ, который ERP отвергла (failed).
+// Новый Idempotency-Key и correlation_id выпускаются только если статус
+// всё ещё failed: ноль затронутых строк — ErrCannotRetry, Submit не вызывается.
+func (s *Orders) Retry(ctx context.Context, orderID int64) (model.Order, error) {
+	key := uuid.NewString()
+	correlationID := uuid.NewString()
+
+	updated, err := s.repo.Retry(ctx, orderID, key, correlationID)
+	if err != nil {
+		return model.Order{}, err
+	}
+	if !updated {
+		return model.Order{}, ErrCannotRetry
+	}
+
+	order, err := s.repo.GetOrder(ctx, orderID)
+	if err != nil {
+		return model.Order{}, err
+	}
+	if err := s.submit(ctx, order, key); err != nil {
+		return model.Order{}, err
+	}
+	return s.repo.GetOrder(ctx, orderID)
+}
+
+// Cancel отменяет заказ из created, confirmed и failed.
+// Из submitted_to_erp, completed и cancelled отмена запрещена: UPDATE нет.
+// Отмена из failed не выпускает новый ключ идемпотентности.
 func (s *Orders) Cancel(ctx context.Context, orderID int64) (model.Order, error) {
-	updated, err := s.repo.Cancel(ctx, orderID)
+	state, err := s.repo.SubmitState(ctx, orderID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return model.Order{}, ErrOrderNotFound
+		}
+		return model.Order{}, err
+	}
+	if !allow(state.Status, actionCancel) {
+		return model.Order{}, ErrCancelNotAllowed
+	}
+
+	var updated bool
+	if state.Status == model.StatusFailed {
+		updated, err = s.repo.CancelFailed(ctx, orderID)
+	} else {
+		updated, err = s.repo.Cancel(ctx, orderID)
+	}
 	if err != nil {
 		return model.Order{}, err
 	}

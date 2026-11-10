@@ -1,4 +1,3 @@
-// Command api — HTTP API Order Service.
 package main
 
 import (

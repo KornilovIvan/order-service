@@ -43,6 +43,7 @@ func (h *Orders) Router() http.Handler {
 		r.Get("/orders/{id}", h.get)
 		r.Post("/orders/{id}/confirm", h.confirm)
 		r.Post("/orders/{id}/resend", h.resend)
+		r.Post("/orders/{id}/retry", h.retry)
 		r.Post("/orders/{id}/cancel", h.cancel)
 	})
 
@@ -199,6 +200,16 @@ func (h *Orders) resend(w http.ResponseWriter, r *http.Request) {
 	h.writeTransition(w, id, order, err, service.ErrCannotResend, "cannot resend")
 }
 
+func (h *Orders) retry(w http.ResponseWriter, r *http.Request) {
+	id, ok := orderIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+
+	order, err := h.svc.Retry(r.Context(), id)
+	h.writeTransition(w, id, order, err, service.ErrCannotRetry, "cannot retry")
+}
+
 func (h *Orders) cancel(w http.ResponseWriter, r *http.Request) {
 	id, ok := orderIDFromRequest(w, r)
 	if !ok {
@@ -213,6 +224,10 @@ func (h *Orders) cancel(w http.ResponseWriter, r *http.Request) {
 func (h *Orders) writeTransition(w http.ResponseWriter, id int64, order model.Order, err error, conflictErr error, conflictMsg string) {
 	if err != nil {
 		switch {
+		case errors.Is(err, service.ErrOrderNotFound):
+			writeError(w, http.StatusNotFound, "order not found")
+		case errors.Is(err, service.ErrCancelNotAllowed):
+			writeError(w, http.StatusConflict, "cancel not allowed")
 		case errors.Is(err, conflictErr):
 			writeError(w, http.StatusConflict, conflictMsg)
 		case errors.Is(err, service.ErrERPUnavailable):
