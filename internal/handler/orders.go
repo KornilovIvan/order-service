@@ -43,7 +43,6 @@ func (h *Orders) Router() http.Handler {
 		r.Get("/orders", h.list)
 		r.Get("/orders/{id}", h.get)
 		r.Post("/orders/{id}/confirm", h.confirm)
-		r.Post("/orders/{id}/resend", h.resend)
 		r.Post("/orders/{id}/retry", h.retry)
 		r.Post("/orders/{id}/cancel", h.cancel)
 	})
@@ -216,17 +215,7 @@ func (h *Orders) confirm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	order, err := h.svc.Confirm(r.Context(), id)
-	h.writeTransition(w, id, order, err, service.ErrCannotConfirm, "cannot confirm")
-}
-
-func (h *Orders) resend(w http.ResponseWriter, r *http.Request) {
-	id, ok := orderIDFromRequest(w, r)
-	if !ok {
-		return
-	}
-
-	order, err := h.svc.Resend(r.Context(), id)
-	h.writeTransition(w, id, order, err, service.ErrCannotResend, "cannot resend")
+	h.writeAccepted(w, id, order, err, service.ErrCannotConfirm, "cannot confirm")
 }
 
 func (h *Orders) retry(w http.ResponseWriter, r *http.Request) {
@@ -236,7 +225,7 @@ func (h *Orders) retry(w http.ResponseWriter, r *http.Request) {
 	}
 
 	order, err := h.svc.Retry(r.Context(), id)
-	h.writeTransition(w, id, order, err, service.ErrCannotRetry, "cannot retry")
+	h.writeAccepted(w, id, order, err, service.ErrCannotRetry, "cannot retry")
 }
 
 func (h *Orders) cancel(w http.ResponseWriter, r *http.Request) {
@@ -270,6 +259,15 @@ func (h *Orders) writeTransition(w http.ResponseWriter, id int64, order model.Or
 	}
 
 	writeJSON(w, http.StatusOK, toResponse(order))
+}
+
+// writeAccepted — confirm/retry: задание принято в очередь, ERP ещё не вызывалась.
+func (h *Orders) writeAccepted(w http.ResponseWriter, id int64, order model.Order, err error, conflictErr error, conflictMsg string) {
+	if err != nil {
+		h.writeTransition(w, id, order, err, conflictErr, conflictMsg)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": order.Status})
 }
 
 func orderIDFromRequest(w http.ResponseWriter, r *http.Request) (int64, bool) {

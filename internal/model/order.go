@@ -18,6 +18,15 @@ const (
 	OrderTypePreorder = "preorder"
 )
 
+// Статусы задания на отправку в ERP. Совпадают с integration_jobs_status_check.
+const (
+	JobQueued     = "queued"
+	JobInProgress = "in_progress"
+	JobDone       = "done"
+	JobFailed     = "failed"
+	JobCancelled  = "cancelled"
+)
+
 type Order struct {
 	ID           int64       `db:"id"`
 	CustomerID   int64       `db:"customer_id"`

@@ -28,7 +28,6 @@ var (
 // Ошибки переходов состояний и интеграции с ERP.
 var (
 	ErrCannotConfirm    = errors.New("cannot confirm")
-	ErrCannotResend     = errors.New("cannot resend")
 	ErrCannotRetry      = errors.New("cannot retry")
 	ErrCannotCancel     = errors.New("cannot cancel")
 	ErrCancelNotAllowed = errors.New("cancel not allowed")
@@ -158,83 +157,28 @@ func (s *Orders) Get(ctx context.Context, id int64) (model.Order, error) {
 	return order, nil
 }
 
-// Confirm переводит заказ created → confirmed и отправляет его в ERP.
-//
-// Ключ идемпотентности и correlation_id генерируются один раз и сохраняются
-// в той же транзакции, что и смена статуса: повторный вызов или Resend
-// используют ровно тот же ключ.
+// Confirm переводит заказ created → confirmed и ставит задание в очередь.
+// ERP из этого запроса не вызывается: отправку заберёт воркер.
 func (s *Orders) Confirm(ctx context.Context, orderID int64) (model.Order, error) {
-	key := uuid.NewString()
-	correlationID := uuid.NewString()
-
-	updated, err := s.repo.Confirm(ctx, orderID, key, correlationID)
+	updated, err := s.repo.Confirm(ctx, orderID, uuid.NewString(), uuid.NewString())
 	if err != nil {
 		return model.Order{}, err
 	}
 	if !updated {
 		return model.Order{}, ErrCannotConfirm
 	}
-
-	order, err := s.repo.GetOrder(ctx, orderID)
-	if err != nil {
-		return model.Order{}, err
-	}
-
-	if err := s.submit(ctx, order, key); err != nil {
-		return model.Order{}, err
-	}
 	return s.repo.GetOrder(ctx, orderID)
 }
 
-// Resend повторяет отправку в ERP для заказа в статусе confirmed,
-// используя ранее сохранённый Idempotency-Key.
-func (s *Orders) Resend(ctx context.Context, orderID int64) (model.Order, error) {
-	state, err := s.repo.SubmitState(ctx, orderID)
-	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return model.Order{}, ErrOrderNotFound
-		}
-		return model.Order{}, err
-	}
-	if !allow(state.Status, actionResend) {
-		return model.Order{}, ErrCannotResend
-	}
-	if !state.IdempotencyKey.Valid || state.IdempotencyKey.String == "" {
-		return model.Order{}, fmt.Errorf("resend order %d: idempotency key is missing", orderID)
-	}
-
-	order, err := s.repo.GetOrder(ctx, orderID)
-	if err != nil {
-		return model.Order{}, err
-	}
-
-	if err := s.submit(ctx, order, state.IdempotencyKey.String); err != nil {
-		return model.Order{}, err
-	}
-	return s.repo.GetOrder(ctx, orderID)
-}
-
-// Retry заново отправляет в ERP заказ, который ERP отвергла (failed).
-// Новый Idempotency-Key и correlation_id выпускаются только если статус
-// всё ещё failed: ноль затронутых строк — ErrCannotRetry, Submit не вызывается.
+// Retry ставит новое задание для заказа в статусе failed.
+// Ноль затронутых строк — ErrCannotRetry, новая строка в integration_jobs не появляется.
 func (s *Orders) Retry(ctx context.Context, orderID int64) (model.Order, error) {
-	key := uuid.NewString()
-	correlationID := uuid.NewString()
-
-	updated, err := s.repo.Retry(ctx, orderID, key, correlationID)
+	updated, err := s.repo.Retry(ctx, orderID, uuid.NewString(), uuid.NewString())
 	if err != nil {
 		return model.Order{}, err
 	}
 	if !updated {
 		return model.Order{}, ErrCannotRetry
-	}
-
-	order, err := s.repo.GetOrder(ctx, orderID)
-	if err != nil {
-		return model.Order{}, err
-	}
-	if err := s.submit(ctx, order, key); err != nil {
-		return model.Order{}, err
 	}
 	return s.repo.GetOrder(ctx, orderID)
 }
@@ -273,7 +217,7 @@ func (s *Orders) Cancel(ctx context.Context, orderID int64) (model.Order, error)
 //   - 200/409 → submitted_to_erp (+ номер ERP);
 //   - 400/422 → failed;
 //   - временная ошибка → заказ остаётся confirmed, наружу возвращается
-//     ErrERPUnavailable (HTTP 502), повтор возможен через Resend.
+//     ErrERPUnavailable (HTTP 502), повтор возможен новым заданием.
 func (s *Orders) submit(ctx context.Context, order model.Order, idempotencyKey string) error {
 	req := erp.SubmitRequest{OrderID: order.ID, CustomerID: order.CustomerID}
 	for _, item := range order.Items {

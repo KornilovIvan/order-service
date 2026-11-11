@@ -9,14 +9,13 @@ const (
 	actionConfirm action = iota
 	actionCancel
 	actionRetry
-	actionResend
 )
 
 // allowed — таблица переходов. Статуса нет в карте или команды нет в статусе:
 // переход запрещён, UPDATE не выполняется.
 //
 //	created          → confirm, cancel
-//	confirmed        → cancel, resend
+//	confirmed        → cancel
 //	failed           → retry, cancel
 //	submitted_to_erp → ничего
 //	completed        → ничего
@@ -28,7 +27,6 @@ var allowed = map[string]map[action]struct{}{
 	},
 	model.StatusConfirmed: {
 		actionCancel: {},
-		actionResend: {},
 	},
 	model.StatusFailed: {
 		actionRetry:  {},

@@ -138,25 +138,41 @@ func (r *Orders) ListByCustomerStatus(ctx context.Context, customerID int64, sta
 	return orders, nil
 }
 
-// Confirm переводит заказ created → confirmed, фиксируя ключ идемпотентности
-// и correlation_id. false — заказ не в статусе created (или его нет).
+// Confirm переводит created → confirmed и вставляет queued-задание.
+// Ключ идемпотентности пишется в integration_jobs, не в orders.
+// false — заказ не в статусе created (или его нет).
 func (r *Orders) Confirm(ctx context.Context, id int64, idempotencyKey, correlationID string) (bool, error) {
+	return r.enqueue(ctx, id, model.StatusCreated, idempotencyKey, correlationID, false)
+}
+
+// Retry переводит failed → confirmed и ставит новое задание.
+// published_at = now(), чтобы повторная отправка в ERP не публиковала событие ещё раз.
+// false — заказ не в статусе failed.
+func (r *Orders) Retry(ctx context.Context, id int64, idempotencyKey, correlationID string) (bool, error) {
+	return r.enqueue(ctx, id, model.StatusFailed, idempotencyKey, correlationID, true)
+}
+
+func (r *Orders) enqueue(ctx context.Context, id int64, fromStatus, idempotencyKey, correlationID string, alreadyPublished bool) (bool, error) {
 	var updated bool
 	err := r.WithTx(ctx, func(tx *sqlx.Tx) error {
 		res, err := tx.ExecContext(ctx,
-			`UPDATE orders
-			    SET status = 'confirmed', idempotency_key = $2, correlation_id = $3
-			  WHERE id = $1 AND status = 'created'`,
-			id, idempotencyKey, correlationID,
+			`UPDATE orders SET status = 'confirmed' WHERE id = $1 AND status = $2`,
+			id, fromStatus,
 		)
 		if err != nil {
-			return fmt.Errorf("confirm order: %w", err)
+			return fmt.Errorf("set confirmed from %s: %w", fromStatus, err)
 		}
 		n, err := res.RowsAffected()
 		if err != nil {
-			return fmt.Errorf("confirm order rows: %w", err)
+			return fmt.Errorf("set confirmed from %s rows: %w", fromStatus, err)
 		}
-		updated = n == 1
+		if n != 1 {
+			return nil
+		}
+		if err := insertJob(ctx, tx, id, idempotencyKey, correlationID, alreadyPublished); err != nil {
+			return err
+		}
+		updated = true
 		return nil
 	})
 	if err != nil {
@@ -165,31 +181,20 @@ func (r *Orders) Confirm(ctx context.Context, id int64, idempotencyKey, correlat
 	return updated, nil
 }
 
-// Retry переводит failed → confirmed и заменяет ключ идемпотентности.
-// false — заказ не в статусе failed (или его нет): новый ключ не сохранён.
-func (r *Orders) Retry(ctx context.Context, id int64, idempotencyKey, correlationID string) (bool, error) {
-	var updated bool
-	err := r.WithTx(ctx, func(tx *sqlx.Tx) error {
-		res, err := tx.ExecContext(ctx,
-			`UPDATE orders
-			    SET status = 'confirmed', idempotency_key = $2, correlation_id = $3
-			  WHERE id = $1 AND status = 'failed'`,
-			id, idempotencyKey, correlationID,
-		)
-		if err != nil {
-			return fmt.Errorf("retry order: %w", err)
-		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("retry order rows: %w", err)
-		}
-		updated = n == 1
-		return nil
-	})
-	if err != nil {
-		return false, err
+func insertJob(ctx context.Context, tx *sqlx.Tx, orderID int64, idempotencyKey, correlationID string, alreadyPublished bool) error {
+	query := `INSERT INTO integration_jobs
+		(order_id, idempotency_key, status, run_at, correlation_id)
+		VALUES ($1, $2, 'queued', now(), $3)`
+	args := []any{orderID, idempotencyKey, correlationID}
+	if alreadyPublished {
+		query = `INSERT INTO integration_jobs
+			(order_id, idempotency_key, status, run_at, published_at, correlation_id)
+			VALUES ($1, $2, 'queued', now(), now(), $3)`
 	}
-	return updated, nil
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("insert job: %w", err)
+	}
+	return nil
 }
 
 // Cancel переводит заказ из created/confirmed в cancelled.
@@ -207,7 +212,15 @@ func (r *Orders) Cancel(ctx context.Context, id int64) (bool, error) {
 		if err != nil {
 			return fmt.Errorf("cancel order rows: %w", err)
 		}
-		updated = n == 1
+		if n != 1 {
+			return nil
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE integration_jobs SET status = 'cancelled'
+			  WHERE order_id = $1 AND status = 'queued'`, id); err != nil {
+			return fmt.Errorf("cancel queued jobs: %w", err)
+		}
+		updated = true
 		return nil
 	})
 	if err != nil {
