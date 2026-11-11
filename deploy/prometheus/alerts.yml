@@ -1,0 +1,20 @@
+groups:
+  - name: erp
+    rules:
+      - alert: ERPPayloadPrepareErrors
+        expr: increase(erp_payload_prepare_errors_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: ERP payload failed before Submit
+          description: Submit was not called; check delivery_date format for {{ $labels.order_type }} ({{ $labels.error_type }}).
+
+      - alert: ERPSubmitErrors
+        expr: increase(erp_submit_errors_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: ERP Submit returned an error
+          description: Submit was called and failed for {{ $labels.order_type }} ({{ $labels.error_type }}).

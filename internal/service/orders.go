@@ -56,6 +56,7 @@ type Orders struct {
 	catalog PriceProvider
 	erp     ERPSubmitter
 	limiter SlotLimiter
+	payload func(model.Order) erp.SubmitRequest
 }
 
 func NewOrders(repo *repository.Orders, prices PriceProvider, erpClient ERPSubmitter) *Orders {

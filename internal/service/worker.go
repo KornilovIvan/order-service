@@ -7,13 +7,10 @@ import (
 	"time"
 
 	"order-service/internal/erp"
-	"order-service/internal/model"
+	"order-service/internal/metrics"
 )
 
-const (
-	preorderDeliveryDate = "2026-05-01T00:00:00Z"
-	defaultJobIdle       = time.Second
-)
+const defaultJobIdle = time.Second
 
 // RunJobs в цикле захватывает задания и отправляет их в ERP.
 // Пустая очередь — сон idle (POLL_IDLE).
@@ -77,7 +74,23 @@ func (s *Orders) ProcessNextJob(ctx context.Context) (bool, error) {
 		}
 	}
 
-	erpOrderID, err := s.erp.Submit(ctx, job.IdempotencyKey, buildSubmit(order))
+	req := buildSubmit(order)
+	if s.payload != nil {
+		req = s.payload(order)
+	}
+	if err := validateERPPayload(req); err != nil {
+		metrics.PrepareError(order.OrderType, metrics.ErrorInvalidDeliveryDate)
+		return true, s.repo.ApplyJobPermanent(ctx, job)
+	}
+
+	erpOrderID, err := s.erp.Submit(ctx, job.IdempotencyKey, req)
+	if err != nil {
+		kind := metrics.ErrorTemporary
+		if errors.Is(err, erp.ErrPermanent) {
+			kind = metrics.ErrorPermanent
+		}
+		metrics.SubmitError(order.OrderType, kind)
+	}
 	switch {
 	case err == nil:
 		return true, s.repo.ApplyJobSuccess(ctx, job, erpOrderID)
@@ -86,23 +99,4 @@ func (s *Orders) ProcessNextJob(ctx context.Context) (bool, error) {
 	default:
 		return true, s.repo.ApplyJobTemporary(ctx, job)
 	}
-}
-
-func buildSubmit(order model.Order) erp.SubmitRequest {
-	req := erp.SubmitRequest{
-		OrderID:   order.ID,
-		OrderType: order.OrderType,
-	}
-	if order.OrderType == model.OrderTypePreorder {
-		d := preorderDeliveryDate
-		req.DeliveryDate = &d
-	}
-	for _, item := range order.Items {
-		req.Items = append(req.Items, erp.Item{
-			ProductID:    erp.ProductID(item.ProductID),
-			Qty:          item.Qty,
-			PriceAtOrder: item.PriceAtOrder,
-		})
-	}
-	return req
 }
