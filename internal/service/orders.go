@@ -212,25 +212,3 @@ func (s *Orders) Cancel(ctx context.Context, orderID int64) (model.Order, error)
 	}
 	return s.repo.GetOrder(ctx, orderID)
 }
-
-// submit отправляет заказ в ERP и применяет результат:
-//   - 200/409 → submitted_to_erp (+ номер ERP);
-//   - 400/422 → failed;
-//   - временная ошибка → заказ остаётся confirmed, наружу возвращается
-//     ErrERPUnavailable (HTTP 502), повтор возможен новым заданием.
-func (s *Orders) submit(ctx context.Context, order model.Order, idempotencyKey string) error {
-	req := erp.SubmitRequest{OrderID: order.ID, CustomerID: order.CustomerID}
-	for _, item := range order.Items {
-		req.Items = append(req.Items, erp.Item{ProductID: item.ProductID, Qty: item.Qty})
-	}
-
-	erpOrderID, err := s.erp.Submit(ctx, idempotencyKey, req)
-	switch {
-	case err == nil:
-		return s.repo.SetStatus(ctx, order.ID, model.StatusSubmittedToERP, erpOrderID)
-	case errors.Is(err, erp.ErrPermanent):
-		return s.repo.SetStatus(ctx, order.ID, model.StatusFailed, "")
-	default:
-		return fmt.Errorf("%w: %v", ErrERPUnavailable, err)
-	}
-}

@@ -79,7 +79,7 @@ func (r *Orders) InsertItem(ctx context.Context, tx *sqlx.Tx, orderID int64, pro
 func (r *Orders) GetOrder(ctx context.Context, id int64) (model.Order, error) {
 	var order model.Order
 	err := r.db.GetContext(ctx, &order,
-		`SELECT id, customer_id, status, order_type, delivery_date, created_at FROM orders WHERE id = $1`, id)
+		`SELECT id, customer_id, status, order_type, delivery_date, created_at, erp_order_id FROM orders WHERE id = $1`, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Order{}, ErrNotFound
 	}

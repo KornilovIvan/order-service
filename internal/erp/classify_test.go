@@ -2,7 +2,9 @@ package erp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -37,7 +39,7 @@ func TestSubmitClassifiesStatus(t *testing.T) {
 			t.Cleanup(srv.Close)
 
 			id, err := New(srv.URL, time.Second).Submit(context.Background(), "key-1", SubmitRequest{
-				OrderID: 1, CustomerID: 1, Items: []Item{{ProductID: "1", Qty: 1}},
+				OrderID: 1, OrderType: "regular", Items: []Item{{ProductID: "1", Qty: 1, PriceAtOrder: "100.00"}},
 			})
 			if id != tc.wantID {
 				t.Fatalf("erp_order_id = %q, want %q", id, tc.wantID)
@@ -52,5 +54,35 @@ func TestSubmitClassifiesStatus(t *testing.T) {
 				t.Fatalf("error = %v, want nil", err)
 			}
 		})
+	}
+}
+
+func TestSubmitJSONShape(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"erp_order_id":"ERP-1"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := New(srv.URL, time.Second).Submit(context.Background(), "key-1", SubmitRequest{
+		OrderID: 1, OrderType: "regular",
+		Items: []Item{{ProductID: "1", Qty: 2, PriceAtOrder: "100.00"}},
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["order_id"] != float64(1) || got["order_type"] != "regular" || got["delivery_date"] != nil {
+		t.Fatalf("body = %s", body)
+	}
+	items, _ := got["items"].([]any)
+	item, _ := items[0].(map[string]any)
+	if item["product_id"] != float64(1) || item["qty"] != float64(2) || item["price_at_order"] != "100.00" {
+		t.Fatalf("item = %#v", item)
 	}
 }

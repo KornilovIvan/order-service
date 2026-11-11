@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -20,16 +21,29 @@ var (
 	ErrTemporary = errors.New("erp: temporary failure")
 )
 
+// ProductID в JSON уходит числом, если это цифры ("1" → 1).
+type ProductID string
+
+func (id ProductID) MarshalJSON() ([]byte, error) {
+	s := string(id)
+	if _, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return []byte(s), nil
+	}
+	return json.Marshal(s)
+}
+
 type Item struct {
-	ProductID string `json:"product_id"`
-	Qty       int    `json:"qty"`
+	ProductID    ProductID `json:"product_id"`
+	Qty          int       `json:"qty"`
+	PriceAtOrder string    `json:"price_at_order"`
 }
 
 // SubmitRequest — тело POST /orders в ERP.
 type SubmitRequest struct {
-	OrderID    int64  `json:"order_id"`
-	CustomerID int64  `json:"customer_id"`
-	Items      []Item `json:"items"`
+	OrderID      int64   `json:"order_id"`
+	OrderType    string  `json:"order_type"`
+	DeliveryDate *string `json:"delivery_date"`
+	Items        []Item  `json:"items"`
 }
 
 // Client — HTTP-клиент ERP.

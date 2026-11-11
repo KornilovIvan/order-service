@@ -65,6 +65,7 @@ func main() {
 	events := publisher.New(kafkaAddrs, kafkaTopic)
 	defer func() { _ = events.Close() }()
 	eventsWorker := publisher.NewWorker(repo, events, pollInterval, 50)
+	jobIdle := durationEnv("POLL_IDLE", time.Second)
 
 	svc := service.NewOrders(repo, priceCache, erp.New(erpBaseURL, erpTimeout))
 
@@ -82,10 +83,15 @@ func main() {
 		defer close(workerDone)
 		eventsWorker.Run(ctx)
 	}()
+	jobsDone := make(chan struct{})
+	go func() {
+		defer close(jobsDone)
+		svc.RunJobs(ctx, jobIdle)
+	}()
 
 	go func() {
-		log.Printf("api: listening on %s, catalog at %s, redis at %s (price ttl %s), erp at %s, kafka %s/%s",
-			httpAddr, catalogAddr, redisAddr, priceCacheTTL, erpBaseURL, strings.Join(kafkaAddrs, ","), kafkaTopic)
+		log.Printf("api: listening on %s, catalog at %s, redis at %s (price ttl %s), erp at %s, jobs idle %s, kafka %s/%s",
+			httpAddr, catalogAddr, redisAddr, priceCacheTTL, erpBaseURL, jobIdle, strings.Join(kafkaAddrs, ","), kafkaTopic)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("api: serve: %v", err)
 		}
@@ -100,8 +106,8 @@ func main() {
 		log.Printf("api: shutdown: %v", err)
 	}
 
-	// Ждём завершения публикатора: он останавливается по отмене ctx.
 	<-workerDone
+	<-jobsDone
 }
 
 func envOr(key, fallback string) string {

@@ -26,14 +26,42 @@ const (
 
 // orderRequest — тело POST /orders.
 type orderRequest struct {
-	OrderID    int64  `json:"order_id"`
-	CustomerID int64  `json:"customer_id"`
-	Items      []item `json:"items"`
+	OrderID      int64   `json:"order_id"`
+	OrderType    string  `json:"order_type"`
+	DeliveryDate *string `json:"delivery_date"`
+	CustomerID   int64   `json:"customer_id"`
+	Items        []item  `json:"items"`
 }
 
 type item struct {
-	ProductID string `json:"product_id"`
-	Qty       int    `json:"qty"`
+	ProductID    productID `json:"product_id"`
+	Qty          int       `json:"qty"`
+	PriceAtOrder string    `json:"price_at_order"`
+}
+
+// productID принимает и число, и строку.
+type productID string
+
+func (p *productID) UnmarshalJSON(data []byte) error {
+	s := strings.TrimSpace(string(data))
+	if s == "null" {
+		*p = ""
+		return nil
+	}
+	if strings.HasPrefix(s, `"`) {
+		var v string
+		if err := json.Unmarshal(data, &v); err != nil {
+			return err
+		}
+		*p = productID(v)
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(data, &n); err != nil {
+		return err
+	}
+	*p = productID(n.String())
+	return nil
 }
 
 // erp — состояние фейковой ERP в памяти.

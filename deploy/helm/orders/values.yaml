@@ -15,6 +15,7 @@ env:
   KAFKA_ADDR: "redpanda:19092"
   KAFKA_TOPIC: "order.created"
   POLL_INTERVAL: "1s"
+  POLL_IDLE: "1s"
 
 # DATABASE_URL содержит пароль, поэтому берётся из Secret, а не из values.
 databaseURL:

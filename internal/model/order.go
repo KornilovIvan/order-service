@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"database/sql"
+	"time"
+)
 
 // Статусы заказа. Совпадают с CHECK-ограничением orders_status_check.
 const (
@@ -28,13 +31,24 @@ const (
 )
 
 type Order struct {
-	ID           int64       `db:"id"`
-	CustomerID   int64       `db:"customer_id"`
-	Status       string      `db:"status"`
-	OrderType    string      `db:"order_type"`
-	DeliveryDate *time.Time  `db:"delivery_date"`
-	CreatedAt    time.Time   `db:"created_at"`
-	Items        []OrderItem `db:"-"`
+	ID           int64          `db:"id"`
+	CustomerID   int64          `db:"customer_id"`
+	Status       string         `db:"status"`
+	OrderType    string         `db:"order_type"`
+	DeliveryDate *time.Time     `db:"delivery_date"`
+	CreatedAt    time.Time      `db:"created_at"`
+	ERPOrderID   sql.NullString `db:"erp_order_id"`
+	Items        []OrderItem    `db:"-"`
+}
+
+// Job — захваченное задание на отправку в ERP.
+type Job struct {
+	ID             int64     `db:"id"`
+	OrderID        int64     `db:"order_id"`
+	IdempotencyKey string    `db:"idempotency_key"`
+	LockedAt       time.Time `db:"locked_at"`
+	LeaseToken     string    `db:"lease_token"`
+	CorrelationID  string    `db:"correlation_id"`
 }
 
 // PendingPublish — заказ, ожидающий публикации события.
