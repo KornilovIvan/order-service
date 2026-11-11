@@ -213,3 +213,43 @@ func (r *Orders) MarkPublished(ctx context.Context, jobID int64, at time.Time) (
 	}
 	return n == 1, nil
 }
+
+const reapStuckSQL = `
+UPDATE integration_jobs j
+SET status = CASE WHEN o.status = 'cancelled' THEN 'cancelled' ELSE 'queued' END,
+    run_at = CASE WHEN o.status = 'cancelled' THEN j.run_at ELSE now() END,
+    locked_at = NULL,
+    lease_token = NULL
+FROM orders o
+WHERE j.id IN (
+    SELECT id FROM integration_jobs
+    WHERE status = 'in_progress'
+      AND locked_at < now() - $1::interval
+    FOR UPDATE SKIP LOCKED
+)
+AND o.id = j.order_id`
+
+// ReapStuckJobs снимает зависшие in_progress: токен и locked_at в NULL.
+// confirmed → queued; cancelled → cancelled, run_at не двигаем.
+func (r *Orders) ReapStuckJobs(ctx context.Context, olderThan time.Duration) (int64, error) {
+	var n int64
+	err := r.WithTx(ctx, func(tx *sqlx.Tx) error {
+		res, err := tx.ExecContext(ctx, reapStuckSQL, intervalArg(olderThan))
+		if err != nil {
+			return fmt.Errorf("reap stuck jobs: %w", err)
+		}
+		n, err = res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("reap stuck jobs rows: %w", err)
+		}
+		return nil
+	})
+	return n, err
+}
+
+func intervalArg(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	return fmt.Sprintf("%d milliseconds", d.Milliseconds())
+}

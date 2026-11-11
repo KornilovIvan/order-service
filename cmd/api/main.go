@@ -33,6 +33,11 @@ func main() {
 	priceCacheTTL := durationEnv("PRICE_CACHE_TTL", 60*time.Second)
 	erpBaseURL := envOr("ERP_BASE_URL", "http://localhost:8081")
 	erpTimeout := durationEnv("ERP_TIMEOUT", 15*time.Second)
+	reaperAfter := durationEnv("REAPER_AFTER", 30*time.Second)
+	reaperEvery := durationEnv("REAPER_EVERY", 10*time.Second)
+	if err := service.ValidateReaperAfter(reaperAfter, erpTimeout); err != nil {
+		log.Fatalf("api: %v", err)
+	}
 
 	db, err := sqlx.Connect("pgx", dsn)
 	if err != nil {
@@ -88,10 +93,15 @@ func main() {
 		defer close(jobsDone)
 		svc.RunJobs(ctx, jobIdle)
 	}()
+	reaperDone := make(chan struct{})
+	go func() {
+		defer close(reaperDone)
+		svc.RunReaper(ctx, reaperEvery, reaperAfter)
+	}()
 
 	go func() {
-		log.Printf("api: listening on %s, catalog at %s, redis at %s (price ttl %s), erp at %s, jobs idle %s, kafka %s/%s",
-			httpAddr, catalogAddr, redisAddr, priceCacheTTL, erpBaseURL, jobIdle, strings.Join(kafkaAddrs, ","), kafkaTopic)
+		log.Printf("api: listening on %s, catalog at %s, redis at %s (price ttl %s), erp at %s (reaper after %s / every %s), jobs idle %s, kafka %s/%s",
+			httpAddr, catalogAddr, redisAddr, priceCacheTTL, erpBaseURL, reaperAfter, reaperEvery, jobIdle, strings.Join(kafkaAddrs, ","), kafkaTopic)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("api: serve: %v", err)
 		}
@@ -108,6 +118,7 @@ func main() {
 
 	<-workerDone
 	<-jobsDone
+	<-reaperDone
 }
 
 func envOr(key, fallback string) string {
