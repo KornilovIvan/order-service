@@ -90,11 +90,16 @@ func TestSecondConfirmDoesNotInsertJob(t *testing.T) {
 	if _, err := svc.Confirm(context.Background(), id); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
+	first := jobsOf(t, db, id)
 	if _, err := svc.Confirm(context.Background(), id); !errors.Is(err, ErrCannotConfirm) {
 		t.Fatalf("second confirm error = %v, want cannot confirm", err)
 	}
-	if n := len(jobsOf(t, db, id)); n != 1 {
-		t.Fatalf("jobs = %d, want 1", n)
+	got := jobsOf(t, db, id)
+	if len(got) != 1 {
+		t.Fatalf("jobs = %d, want 1", len(got))
+	}
+	if got[0].IdempotencyKey != first[0].IdempotencyKey {
+		t.Fatalf("key changed: %s → %s", first[0].IdempotencyKey, got[0].IdempotencyKey)
 	}
 }
 
@@ -129,8 +134,12 @@ func TestParallelConfirmEnqueuesOneJob(t *testing.T) {
 	if ok != 1 || denied != 1 {
 		t.Fatalf("success=%d cannot-confirm=%d", ok, denied)
 	}
-	if n := len(jobsOf(t, db, id)); n != 1 {
-		t.Fatalf("jobs = %d, want 1", n)
+	got := jobsOf(t, db, id)
+	if len(got) != 1 {
+		t.Fatalf("jobs = %d, want 1 row", len(got))
+	}
+	if got[0].IdempotencyKey == "" {
+		t.Fatal("idempotency_key is empty")
 	}
 }
 

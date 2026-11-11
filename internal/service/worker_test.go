@@ -32,6 +32,7 @@ func TestWorkerSubmitsConfirmedOrder(t *testing.T) {
 	svc := NewOrders(repository.NewOrders(db), nil, erp.New(srv.URL, time.Second))
 	id := insertCreatedOrder(t, db)
 	cleanupOrder(t, db, id)
+	postponeQueuedJobs(t, db)
 
 	if _, err := svc.Confirm(context.Background(), id); err != nil {
 		t.Fatalf("confirm: %v", err)
@@ -74,6 +75,7 @@ func TestWorkerPollsWithinThreeSeconds(t *testing.T) {
 	svc := NewOrders(repository.NewOrders(db), nil, erp.New(srv.URL, time.Second))
 	id := insertCreatedOrder(t, db)
 	cleanupOrder(t, db, id)
+	postponeQueuedJobs(t, db)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -104,14 +106,72 @@ func TestWorkerConflictIsSuccess(t *testing.T) {
 	svc := NewOrders(repository.NewOrders(db), nil, erp.New(srv.URL, time.Second))
 	id := insertCreatedOrder(t, db)
 	cleanupOrder(t, db, id)
+	postponeQueuedJobs(t, db)
 	if _, err := svc.Confirm(context.Background(), id); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
 	if _, err := svc.ProcessNextJob(context.Background()); err != nil {
 		t.Fatalf("process: %v", err)
 	}
-	if st := mustStored(t, db, id); st.Status != model.StatusSubmittedToERP {
-		t.Fatalf("status = %s", st.Status)
+	st := mustStored(t, db, id)
+	if st.Status != model.StatusSubmittedToERP {
+		t.Fatalf("status = %s, want submitted_to_erp (как 200)", st.Status)
+	}
+	if st.ERPOrderID.String != "ERP-1" {
+		t.Fatalf("erp_order_id = %q", st.ERPOrderID.String)
+	}
+	jobs := jobsOf(t, db, id)
+	if len(jobs) != 1 || jobs[0].Status != model.JobDone {
+		t.Fatalf("jobs = %+v, want done", jobs)
+	}
+}
+
+func TestLate200AfterCancelKeepsNumber(t *testing.T) {
+	db := testDB(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	srv := startERP(t, func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"erp_order_id":"ERP-LATE"}`))
+	})
+	svc := NewOrders(repository.NewOrders(db), nil, erp.New(srv.URL, 5*time.Second))
+	id := insertCreatedOrder(t, db)
+	cleanupOrder(t, db, id)
+	postponeQueuedJobs(t, db)
+	if _, err := svc.Confirm(context.Background(), id); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := svc.ProcessNextJob(context.Background())
+		errCh <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("submit did not start")
+	}
+	if _, err := svc.Cancel(context.Background(), id); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	close(release)
+	if err := <-errCh; err != nil {
+		t.Fatalf("process: %v", err)
+	}
+
+	st := mustStored(t, db, id)
+	if st.Status != model.StatusCancelled {
+		t.Fatalf("status = %s, want cancelled", st.Status)
+	}
+	if st.ERPOrderID.String != "ERP-LATE" {
+		t.Fatalf("erp_order_id = %q, want ERP-LATE", st.ERPOrderID.String)
+	}
+	jobs := jobsOf(t, db, id)
+	if len(jobs) != 1 || jobs[0].Status != model.JobDone {
+		t.Fatalf("jobs = %+v, want done", jobs)
 	}
 }
 
@@ -124,6 +184,7 @@ func TestWorkerPermanentFailsConfirmed(t *testing.T) {
 	svc := NewOrders(repository.NewOrders(db), nil, erp.New(srv.URL, time.Second))
 	id := insertCreatedOrder(t, db)
 	cleanupOrder(t, db, id)
+	postponeQueuedJobs(t, db)
 	if _, err := svc.Confirm(context.Background(), id); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
@@ -140,7 +201,7 @@ func TestWorkerPermanentFailsConfirmed(t *testing.T) {
 	}
 }
 
-func TestWorkerCancelledKeepsOrderOnReject(t *testing.T) {
+func TestLate422AfterCancelDoesNotFailOrder(t *testing.T) {
 	db := testDB(t)
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -153,6 +214,7 @@ func TestWorkerCancelledKeepsOrderOnReject(t *testing.T) {
 	svc := NewOrders(repository.NewOrders(db), nil, erp.New(srv.URL, 5*time.Second))
 	id := insertCreatedOrder(t, db)
 	cleanupOrder(t, db, id)
+	postponeQueuedJobs(t, db)
 	if _, err := svc.Confirm(context.Background(), id); err != nil {
 		t.Fatalf("confirm: %v", err)
 	}
@@ -176,7 +238,10 @@ func TestWorkerCancelledKeepsOrderOnReject(t *testing.T) {
 	}
 	st := mustStored(t, db, id)
 	if st.Status != model.StatusCancelled {
-		t.Fatalf("status = %s, want cancelled", st.Status)
+		t.Fatalf("status = %s, want cancelled (not failed)", st.Status)
+	}
+	if st.ERPOrderID.Valid {
+		t.Fatalf("erp_order_id = %q, want empty", st.ERPOrderID.String)
 	}
 	jobs := jobsOf(t, db, id)
 	if len(jobs) != 1 || jobs[0].Status != model.JobFailed {
