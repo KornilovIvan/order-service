@@ -162,3 +162,54 @@ func setJobStatus(ctx context.Context, tx *sqlx.Tx, job model.Job, status string
 	}
 	return nil
 }
+
+const claimPublishSQL = `
+UPDATE integration_jobs
+SET publish_locked_at = now()
+WHERE id IN (
+    SELECT id FROM integration_jobs
+    WHERE published_at IS NULL
+      AND status != 'cancelled'
+      AND (publish_locked_at IS NULL OR publish_locked_at < now() - interval '60s')
+    ORDER BY id
+    FOR UPDATE SKIP LOCKED
+    LIMIT $1
+)
+RETURNING id, order_id, correlation_id`
+
+// ClaimPendingPublish атомарно берёт до limit неопубликованных заданий (вариант B).
+// cancelled не берём. in_progress и done с пустым published_at берём — это гонка outbox.
+func (r *Orders) ClaimPendingPublish(ctx context.Context, limit int) ([]model.PendingPublish, error) {
+	var rows []model.PendingPublish
+	err := r.WithTx(ctx, func(tx *sqlx.Tx) error {
+		if err := tx.SelectContext(ctx, &rows, claimPublishSQL, limit); err != nil {
+			return fmt.Errorf("claim pending publish: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if rows == nil {
+		return []model.PendingPublish{}, nil
+	}
+	return rows, nil
+}
+
+// MarkPublished ставит published_at и снимает publish_locked_at.
+// false — строка уже опубликована другим экземпляром.
+func (r *Orders) MarkPublished(ctx context.Context, jobID int64, at time.Time) (bool, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE integration_jobs
+		    SET published_at = $2, publish_locked_at = NULL
+		  WHERE id = $1 AND published_at IS NULL`,
+		jobID, at)
+	if err != nil {
+		return false, fmt.Errorf("mark job published: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("mark job published rows: %w", err)
+	}
+	return n == 1, nil
+}

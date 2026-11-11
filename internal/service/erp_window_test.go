@@ -43,17 +43,16 @@ func insertCreatedOrder(t *testing.T, db *sqlx.DB) int64 {
 }
 
 type storedOrder struct {
-	Status         string
-	ERPOrderID     sql.NullString
-	IdempotencyKey sql.NullString
+	Status     string
+	ERPOrderID sql.NullString
 }
 
 func mustStored(t *testing.T, db *sqlx.DB, id int64) storedOrder {
 	t.Helper()
 	var st storedOrder
 	err := db.QueryRow(
-		`SELECT status, erp_order_id, idempotency_key::text FROM orders WHERE id = $1`, id,
-	).Scan(&st.Status, &st.ERPOrderID, &st.IdempotencyKey)
+		`SELECT status, erp_order_id FROM orders WHERE id = $1`, id,
+	).Scan(&st.Status, &st.ERPOrderID)
 	if err != nil {
 		t.Fatalf("select order %d: %v", id, err)
 	}

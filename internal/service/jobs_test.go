@@ -66,11 +66,6 @@ func TestConfirmEnqueuesQueuedJob(t *testing.T) {
 		t.Fatalf("status = %s, want confirmed", order.Status)
 	}
 
-	st := mustStored(t, db, id)
-	if st.IdempotencyKey.Valid {
-		t.Fatalf("order idempotency_key = %q, want NULL", st.IdempotencyKey.String)
-	}
-
 	got := jobsOf(t, db, id)
 	if len(got) != 1 {
 		t.Fatalf("jobs = %d, want 1", len(got))

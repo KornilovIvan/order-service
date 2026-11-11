@@ -51,10 +51,11 @@ type Job struct {
 	CorrelationID  string    `db:"correlation_id"`
 }
 
-// PendingPublish — заказ, ожидающий публикации события.
+// PendingPublish — задание, ожидающее публикации события.
 type PendingPublish struct {
-	ID            int64
-	CorrelationID string
+	ID            int64  `db:"id"`
+	OrderID       int64  `db:"order_id"`
+	CorrelationID string `db:"correlation_id"`
 }
 
 // OrderItem — позиция заказа.

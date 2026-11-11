@@ -1,4 +1,5 @@
-replicaCount: 1
+# Вариант B: два API, publisher в каждом. Строки outbox делят через publish_locked_at.
+replicaCount: 2
 
 image:
   repository: order-service

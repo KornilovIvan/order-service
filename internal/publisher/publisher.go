@@ -1,9 +1,9 @@
-// Package publisher публикует события заказов в Kafka/Redpanda.
+// Package publisher публикует события заданий в Kafka/Redpanda.
 //
-// Публикация устроена как упрощённый outbox: состояние «ещё не опубликовано»
-// хранится в самом заказе (published_at IS NULL), поэтому событие не теряется
-// при падении процесса между коммитом и отправкой. Гарантия доставки —
-// at-least-once: дубли возможны, потребитель должен быть идемпотентным.
+// Outbox — integration_jobs.published_at. Publisher захватывает строки
+// через publish_locked_at (lease 60s, вариант B): несколько экземпляров API
+// не берут одно задание одновременно. Падение после Kafka и до published_at
+// даёт повтор — at-least-once. Потребитель дедуплицирует по job_id.
 package publisher
 
 import (
@@ -25,6 +25,7 @@ const EventOrderCreated = "order.created"
 type Event struct {
 	Event         string `json:"event"`
 	OrderID       int64  `json:"order_id"`
+	JobID         int64  `json:"job_id"`
 	CorrelationID string `json:"correlation_id"`
 }
 
@@ -33,23 +34,19 @@ type Publisher struct {
 	writer *kafka.Writer
 }
 
-// New создаёт публикатора. topic должен существовать заранее либо
-// брокер разрешает автосоздание.
 func New(brokers []string, topic string) *Publisher {
 	return &Publisher{
 		writer: &kafka.Writer{
-			Addr:         kafka.TCP(brokers...),
-			Topic:        topic,
-			Balancer:     &kafka.Hash{}, // ключ сообщения = order_id → порядок по заказу
-			RequiredAcks: kafka.RequireAll,
-			// Для локальной разработки удобно: топик создаётся сам.
+			Addr:                   kafka.TCP(brokers...),
+			Topic:                  topic,
+			Balancer:               &kafka.Hash{},
+			RequiredAcks:           kafka.RequireAll,
 			AllowAutoTopicCreation: true,
 			BatchTimeout:           10 * time.Millisecond,
 		},
 	}
 }
 
-// Publish отправляет одно событие и ждёт подтверждения брокера.
 func (p *Publisher) Publish(ctx context.Context, ev Event) error {
 	body, err := json.Marshal(ev)
 	if err != nil {
@@ -57,7 +54,7 @@ func (p *Publisher) Publish(ctx context.Context, ev Event) error {
 	}
 
 	msg := kafka.Message{
-		Key:   []byte(strconv.FormatInt(ev.OrderID, 10)),
+		Key:   []byte(strconv.FormatInt(ev.JobID, 10)),
 		Value: body,
 	}
 	if err := p.writer.WriteMessages(ctx, msg); err != nil {
@@ -66,18 +63,16 @@ func (p *Publisher) Publish(ctx context.Context, ev Event) error {
 	return nil
 }
 
-// Close закрывает соединение с брокером.
 func (p *Publisher) Close() error {
 	return p.writer.Close()
 }
 
-// Source — источник неопубликованных заказов и приёмник отметки о публикации.
+// Source — захват неопубликованных заданий и отметка published_at.
 type Source interface {
-	PendingPublish(ctx context.Context, limit int) ([]model.PendingPublish, error)
-	MarkPublished(ctx context.Context, ids []int64, at time.Time) error
+	ClaimPendingPublish(ctx context.Context, limit int) ([]model.PendingPublish, error)
+	MarkPublished(ctx context.Context, jobID int64, at time.Time) (bool, error)
 }
 
-// Worker периодически публикует события по неопубликованным заказам.
 type Worker struct {
 	source   Source
 	pub      *Publisher
@@ -89,7 +84,6 @@ func NewWorker(source Source, pub *Publisher, interval time.Duration, limit int)
 	return &Worker{source: source, pub: pub, interval: interval, limit: limit}
 }
 
-// Run выполняет первый проход сразу и далее по тикеру до отмены ctx.
 func (w *Worker) Run(ctx context.Context) {
 	if err := w.poll(ctx); err != nil && ctx.Err() == nil {
 		log.Printf("publisher: poll: %v", err)
@@ -110,9 +104,8 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
-// poll публикует одну пачку и отмечает успешно опубликованные заказы.
 func (w *Worker) poll(ctx context.Context) error {
-	pending, err := w.source.PendingPublish(ctx, w.limit)
+	pending, err := w.source.ClaimPendingPublish(ctx, w.limit)
 	if err != nil {
 		return err
 	}
@@ -120,28 +113,27 @@ func (w *Worker) poll(ctx context.Context) error {
 		return nil
 	}
 
-	published := make([]int64, 0, len(pending))
-	for _, order := range pending {
+	n := 0
+	for _, job := range pending {
 		ev := Event{
 			Event:         EventOrderCreated,
-			OrderID:       order.ID,
-			CorrelationID: order.CorrelationID,
+			OrderID:       job.OrderID,
+			JobID:         job.ID,
+			CorrelationID: job.CorrelationID,
 		}
 		if err := w.pub.Publish(ctx, ev); err != nil {
-			// То, что уже ушло в брокер, отмечаем, чтобы не публиковать повторно.
-			if len(published) > 0 {
-				if markErr := w.source.MarkPublished(ctx, published, time.Now()); markErr != nil {
-					return fmt.Errorf("%v; mark published: %w", err, markErr)
-				}
-			}
 			return err
 		}
-		published = append(published, order.ID)
+		ok, err := w.source.MarkPublished(ctx, job.ID, time.Now())
+		if err != nil {
+			return err
+		}
+		if ok {
+			n++
+		}
 	}
-
-	if err := w.source.MarkPublished(ctx, published, time.Now()); err != nil {
-		return err
+	if n > 0 {
+		log.Printf("publisher: published %d event(s)", n)
 	}
-	log.Printf("publisher: published %d event(s)", len(published))
 	return nil
 }
