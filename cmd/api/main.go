@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"order-service/internal/catalog"
 	"order-service/internal/erp"
 	"order-service/internal/handler"
+	"order-service/internal/limiter"
 	"order-service/internal/publisher"
 	"order-service/internal/repository"
 	"order-service/internal/service"
@@ -73,6 +75,11 @@ func main() {
 	jobIdle := durationEnv("POLL_IDLE", time.Second)
 
 	svc := service.NewOrders(repo, priceCache, erp.New(erpBaseURL, erpTimeout))
+	erpLimit := intEnv("ERP_LIMIT", 0)
+	erpWindow := durationEnv("ERP_WINDOW", time.Second)
+	if erpLimit > 0 {
+		svc.UseLimiter(limiter.New(rdb, erpLimit, erpWindow))
+	}
 
 	srv := &http.Server{
 		Addr:              httpAddr,
@@ -100,8 +107,8 @@ func main() {
 	}()
 
 	go func() {
-		log.Printf("api: listening on %s, catalog at %s, redis at %s (price ttl %s), erp at %s (reaper after %s / every %s), jobs idle %s, kafka %s/%s",
-			httpAddr, catalogAddr, redisAddr, priceCacheTTL, erpBaseURL, reaperAfter, reaperEvery, jobIdle, strings.Join(kafkaAddrs, ","), kafkaTopic)
+		log.Printf("api: listening on %s, catalog at %s, redis at %s (price ttl %s), erp at %s (limit %d / window %s, reaper after %s / every %s), jobs idle %s, kafka %s/%s",
+			httpAddr, catalogAddr, redisAddr, priceCacheTTL, erpBaseURL, erpLimit, erpWindow, reaperAfter, reaperEvery, jobIdle, strings.Join(kafkaAddrs, ","), kafkaTopic)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("api: serve: %v", err)
 		}
@@ -126,6 +133,18 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func intEnv(key string, fallback int) int {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
 func durationEnv(key string, fallback time.Duration) time.Duration {

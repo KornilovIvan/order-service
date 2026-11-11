@@ -11,6 +11,7 @@ import (
 
 	"order-service/internal/catalog"
 	"order-service/internal/erp"
+	"order-service/internal/limiter"
 	"order-service/internal/model"
 	"order-service/internal/repository"
 )
@@ -45,14 +46,25 @@ type ERPSubmitter interface {
 	Submit(ctx context.Context, idempotencyKey string, req erp.SubmitRequest) (string, error)
 }
 
+// SlotLimiter выдаёт слот на вызов ERP после захвата задания.
+type SlotLimiter interface {
+	Claim(ctx context.Context) (limiter.ClaimResponse, error)
+}
+
 type Orders struct {
 	repo    *repository.Orders
 	catalog PriceProvider
 	erp     ERPSubmitter
+	limiter SlotLimiter
 }
 
 func NewOrders(repo *repository.Orders, prices PriceProvider, erpClient ERPSubmitter) *Orders {
 	return &Orders{repo: repo, catalog: prices, erp: erpClient}
+}
+
+func (s *Orders) UseLimiter(l SlotLimiter) *Orders {
+	s.limiter = l
+	return s
 }
 
 // CreateInput — входные данные создания заказа.

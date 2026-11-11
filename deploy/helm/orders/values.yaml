@@ -14,6 +14,8 @@ env:
   PRICE_CACHE_TTL: "60s"
   ERP_BASE_URL: "http://erpfake:8081"
   ERP_TIMEOUT: "15s"
+  ERP_LIMIT: "10"
+  ERP_WINDOW: "1s"
   REAPER_AFTER: "30s"
   REAPER_EVERY: "10s"
   KAFKA_ADDR: "redpanda:19092"

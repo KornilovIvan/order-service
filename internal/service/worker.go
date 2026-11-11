@@ -64,6 +64,19 @@ func (s *Orders) ProcessNextJob(ctx context.Context) (bool, error) {
 		return true, err
 	}
 
+	if s.limiter != nil {
+		slot, limErr := s.limiter.Claim(ctx)
+		if limErr != nil {
+			if relErr := s.repo.ReleaseJob(ctx, job, 30*time.Second); relErr != nil {
+				return true, errors.Join(limErr, relErr)
+			}
+			return true, limErr
+		}
+		if !slot.Allowed {
+			return true, s.repo.ReleaseJob(ctx, job, slot.RetryAfter)
+		}
+	}
+
 	erpOrderID, err := s.erp.Submit(ctx, job.IdempotencyKey, buildSubmit(order))
 	switch {
 	case err == nil:
