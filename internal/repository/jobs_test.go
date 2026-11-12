@@ -5,6 +5,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -201,5 +202,99 @@ func TestApplyJobPermanentOnCancelledDoesNotFailOrder(t *testing.T) {
 	}
 	if jobStatus != model.JobFailed {
 		t.Fatalf("job = %s, want failed", jobStatus)
+	}
+}
+
+// TestClaimPublishLeaseExclusive — приёмка варианта B: два экземпляра API
+// одновременно захватывают outbox, но одну строку получает только один:
+// действующий publish_locked_at исключает её из второго захвата.
+func TestClaimPublishLeaseExclusive(t *testing.T) {
+	db := testDB(t)
+	repo := NewOrders(db)
+	ctx := context.Background()
+
+	const orders = 8
+	for i := 0; i < orders; i++ {
+		id := insertCreatedOrder(t, db)
+		if ok, err := repo.Confirm(ctx, id, uuid.NewString(), uuid.NewString()); err != nil || !ok {
+			t.Fatalf("confirm: ok=%v err=%v", ok, err)
+		}
+	}
+
+	const instances = 2
+	claimed := make([]map[int64]bool, instances)
+	var wg sync.WaitGroup
+	wg.Add(instances)
+	for i := 0; i < instances; i++ {
+		go func(i int) {
+			defer wg.Done()
+			pending, err := repo.ClaimPendingPublish(ctx, 1000)
+			if err != nil {
+				t.Errorf("instance %d claim: %v", i, err)
+				return
+			}
+			claimed[i] = make(map[int64]bool, len(pending))
+			for _, job := range pending {
+				claimed[i][job.ID] = true
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	for id := range claimed[0] {
+		if claimed[1][id] {
+			t.Fatalf("job %d claimed by both instances while publish_locked_at is set", id)
+		}
+	}
+	// Полноту не проверяем: в общей БД параллельно работает живой publisher,
+	// часть строк может достаться ему. Нас интересует отсутствие пересечения.
+	if len(claimed[0])+len(claimed[1]) == 0 {
+		t.Skip("no job was claimable: outbox занят внешним publisher'ом")
+	}
+	// Захват обязан оставить след — иначе lease не защищает.
+	var locked int
+	for id := range claimed[0] {
+		if err := db.QueryRow(
+			`SELECT count(*) FROM integration_jobs WHERE id = $1 AND publish_locked_at IS NOT NULL`, id,
+		).Scan(&locked); err != nil {
+			t.Fatalf("check lease: %v", err)
+		}
+		if locked != 1 {
+			t.Fatalf("job %d claimed without publish_locked_at", id)
+		}
+	}
+
+	// Lease действует 60s: сразу после захвата строки недоступны обоим.
+	pending, err := repo.ClaimPendingPublish(ctx, 1000)
+	if err != nil {
+		t.Fatalf("second claim: %v", err)
+	}
+	for _, job := range pending {
+		if claimed[0][job.ID] || claimed[1][job.ID] {
+			t.Fatalf("job %d re-claimed while lease is active", job.ID)
+		}
+	}
+
+	// Отметка published_at другого экземпляра не должна проходить дважды.
+	var first int64
+	for id := range claimed[0] {
+		first = id
+		break
+	}
+	if first == 0 {
+		// Всю пачку забрал второй экземпляр — берём из него.
+		for id := range claimed[1] {
+			first = id
+			break
+		}
+	}
+	if first == 0 {
+		t.Fatal("no jobs claimed")
+	}
+	if ok, err := repo.MarkPublished(ctx, first, time.Now()); err != nil || !ok {
+		t.Fatalf("mark: ok=%v err=%v", ok, err)
+	}
+	if ok, err := repo.MarkPublished(ctx, first, time.Now()); err != nil || ok {
+		t.Fatalf("second mark: ok=%v err=%v, want ok=false", ok, err)
 	}
 }

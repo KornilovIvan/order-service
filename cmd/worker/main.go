@@ -64,6 +64,11 @@ func main() {
 
 func servePprof(addr string) {
 	mux := http.NewServeMux()
+	// Тот же порт обслуживает probes: /healthz отдельно от pprof.
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok\n"))
+	})
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)

@@ -1,0 +1,26 @@
+# Service нужен воркеру: он ходит в gRPC JobService (ClaimJob/CompleteJob)
+# по адресу <release>-api:<api.grpcPort>.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-api
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/component: api
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/component: api
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.api.containerPort }}
+      targetPort: http
+      protocol: TCP
+    - name: grpc
+      port: {{ .Values.api.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
