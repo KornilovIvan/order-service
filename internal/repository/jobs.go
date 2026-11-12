@@ -253,3 +253,40 @@ func intervalArg(d time.Duration) string {
 	}
 	return fmt.Sprintf("%d milliseconds", d.Milliseconds())
 }
+
+// JobByID читает задание вместе с lease — нужно для проверки владельца
+// в gRPC-методе CompleteJob.
+func (r *Orders) JobByID(ctx context.Context, id int64) (model.Job, error) {
+	var row struct {
+		ID             int64          `db:"id"`
+		OrderID        int64          `db:"order_id"`
+		IdempotencyKey string         `db:"idempotency_key"`
+		LockedAt       sql.NullTime   `db:"locked_at"`
+		LeaseToken     sql.NullString `db:"lease_token"`
+		CorrelationID  string         `db:"correlation_id"`
+	}
+
+	err := r.db.GetContext(ctx, &row, `
+		SELECT id, order_id, idempotency_key::text AS idempotency_key,
+		       locked_at, lease_token::text AS lease_token, correlation_id
+		  FROM integration_jobs
+		 WHERE id = $1`, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Job{}, ErrNotFound
+	}
+	if err != nil {
+		return model.Job{}, fmt.Errorf("select job: %w", err)
+	}
+
+	job := model.Job{
+		ID:             row.ID,
+		OrderID:        row.OrderID,
+		IdempotencyKey: row.IdempotencyKey,
+		CorrelationID:  row.CorrelationID,
+		LeaseToken:     row.LeaseToken.String,
+	}
+	if row.LockedAt.Valid {
+		job.LockedAt = row.LockedAt.Time
+	}
+	return job, nil
+}

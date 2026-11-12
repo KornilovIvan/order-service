@@ -1,0 +1,39 @@
+syntax = "proto3";
+package jobs.v1;
+option go_package = "order-service/internal/gen/jobs/v1;jobsv1";
+import "google/protobuf/timestamp.proto";
+
+service JobService {
+  rpc ClaimJob(ClaimRequest) returns (ClaimResponse);
+  rpc CompleteJob(CompleteRequest) returns (CompleteResponse);
+}
+
+message ClaimRequest { 
+    string worker_id = 1; 
+}
+
+message ClaimResponse {
+  Job job = 1;
+  google.protobuf.Timestamp retry_after = 2;
+}
+
+message Job {
+  int64 id = 1;
+  int64 order_id = 2;
+  string idempotency_key = 3;
+  google.protobuf.Timestamp locked_at = 4;
+  string correlation_id = 5;
+  string request_body = 6;
+  string lease_token = 7;
+}
+
+message CompleteRequest {
+  int64 job_id = 1;
+  google.protobuf.Timestamp locked_at = 2;
+  string lease_token = 3;
+  int32 http_status = 4;
+  string response_body = 5;
+  string error = 6;
+}
+
+message CompleteResponse {}

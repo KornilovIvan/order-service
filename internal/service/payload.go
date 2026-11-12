@@ -13,6 +13,9 @@ const deliveryDateLayout = "2006-01-02"
 
 var errInvalidDeliveryDate = errors.New("invalid delivery_date")
 
+// BuildSubmit — тело запроса в ERP для заказа (для gRPC-слоя).
+func BuildSubmit(order model.Order) erp.SubmitRequest { return buildSubmit(order) }
+
 func buildSubmit(order model.Order) erp.SubmitRequest {
 	req := erp.SubmitRequest{
 		OrderID:   order.ID,

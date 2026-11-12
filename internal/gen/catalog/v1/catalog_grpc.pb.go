@@ -25,11 +25,7 @@ const (
 // CatalogClient is the client API for Catalog service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-//
-// Catalog — минимальный контракт каталога товаров.
 type CatalogClient interface {
-	// GetProduct возвращает товар по идентификатору.
-	// Неизвестный идентификатор — codes.NotFound.
 	GetProduct(ctx context.Context, in *GetProductRequest, opts ...grpc.CallOption) (*GetProductResponse, error)
 }
 
@@ -54,11 +50,7 @@ func (c *catalogClient) GetProduct(ctx context.Context, in *GetProductRequest, o
 // CatalogServer is the server API for Catalog service.
 // All implementations must embed UnimplementedCatalogServer
 // for forward compatibility.
-//
-// Catalog — минимальный контракт каталога товаров.
 type CatalogServer interface {
-	// GetProduct возвращает товар по идентификатору.
-	// Неизвестный идентификатор — codes.NotFound.
 	GetProduct(context.Context, *GetProductRequest) (*GetProductResponse, error)
 	mustEmbedUnimplementedCatalogServer()
 }

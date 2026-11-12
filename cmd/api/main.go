@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,10 +16,14 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx"
 	"github.com/redis/go-redis/v9"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 
 	"order-service/internal/catalog"
 	"order-service/internal/erp"
+	jobsv1 "order-service/internal/gen/jobs/v1"
 	"order-service/internal/handler"
+	"order-service/internal/jobs"
 	"order-service/internal/limiter"
 	"order-service/internal/publisher"
 	"order-service/internal/repository"
@@ -30,6 +35,7 @@ const shutdownTimeout = 10 * time.Second
 func main() {
 	dsn := envOr("DATABASE_URL", "postgres://orders:orders@localhost:5432/orders?sslmode=disable")
 	httpAddr := envOr("HTTP_ADDR", ":8080")
+	grpcAddr := envOr("GRPC_ADDR", ":9090")
 	catalogAddr := envOr("CATALOG_GRPC_ADDR", "localhost:9091")
 	redisAddr := envOr("REDIS_ADDR", "localhost:6379")
 	priceCacheTTL := durationEnv("PRICE_CACHE_TTL", 60*time.Second)
@@ -90,6 +96,22 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	grpcLis, err := net.Listen("tcp", grpcAddr)
+	if err != nil {
+		log.Fatalf("api: listen grpc %s: %v", grpcAddr, err)
+	}
+	grpcSrv := grpc.NewServer()
+	jobsv1.RegisterJobServiceServer(grpcSrv, jobs.New(repo, jobIdle))
+	reflection.Register(grpcSrv)
+
+	grpcDone := make(chan struct{})
+	go func() {
+		defer close(grpcDone)
+		if err := grpcSrv.Serve(grpcLis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			log.Printf("api: grpc serve: %v", err)
+		}
+	}()
+
 	workerDone := make(chan struct{})
 	go func() {
 		defer close(workerDone)
@@ -107,8 +129,8 @@ func main() {
 	}()
 
 	go func() {
-		log.Printf("api: listening on %s, catalog at %s, redis at %s (price ttl %s), erp at %s (limit %d / window %s, reaper after %s / every %s), jobs idle %s, kafka %s/%s",
-			httpAddr, catalogAddr, redisAddr, priceCacheTTL, erpBaseURL, erpLimit, erpWindow, reaperAfter, reaperEvery, jobIdle, strings.Join(kafkaAddrs, ","), kafkaTopic)
+		log.Printf("api: listening on %s, grpc on %s, catalog at %s, redis at %s (price ttl %s), erp at %s (limit %d / window %s, reaper after %s / every %s), jobs idle %s, kafka %s/%s",
+			httpAddr, grpcAddr, catalogAddr, redisAddr, priceCacheTTL, erpBaseURL, erpLimit, erpWindow, reaperAfter, reaperEvery, jobIdle, strings.Join(kafkaAddrs, ","), kafkaTopic)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("api: serve: %v", err)
 		}
@@ -126,6 +148,10 @@ func main() {
 	<-workerDone
 	<-jobsDone
 	<-reaperDone
+
+	// gRPC останавливаем после HTTP: воркер успевает дописать результат задания.
+	grpcSrv.GracefulStop()
+	<-grpcDone
 }
 
 func envOr(key, fallback string) string {
