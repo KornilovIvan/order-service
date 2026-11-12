@@ -35,10 +35,11 @@ proto:
 		--go-grpc_out=. --go-grpc_opt=module=$(MODULE) \
 		$(PROTO_SRCS)
 
-# Тот же образ, что в CI. Первый запуск скачивает тулчейн и модули,
-# поэтому кеш вынесен в тома и переживает запуски.
+# Тот же образ, что в CI: v2 собран на Go 1.26, как требует go.mod.
+# Модули и кеш сборки лежат в томах, иначе каждый запуск качает их заново.
 lint:
 	docker run --rm -v "$(CURDIR)":/app -w /app \
 		-v golangci-mod:/go/pkg/mod \
 		-v golangci-build:/root/.cache/go-build \
-		golangci/golangci-lint:v1.64.8 golangci-lint run --timeout 10m ./...
+		-e GOGC=30 -e GOMEMLIMIT=1500MiB \
+		golangci/golangci-lint:v2.15.0 golangci-lint run --timeout 10m --concurrency 2 ./...
