@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1226" height="900" viewBox="0 0 1226 900" role="img" aria-label="Архитектура order-service">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#374151"/>
+    </marker>
+    <style>
+      .group { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 13.5px; font-weight: 700; fill: #374151; }
+      .box-title { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 16px; fill: #1f2937; }
+      .box-sub { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 12.5px; fill: #6b7280; }
+      .label { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 12.5px; fill: #6b7280; }
+    </style>
+  </defs>
+
+  <rect width="1226" height="900" fill="#ffffff"/>
+
+  <!-- ============ group: clients & monitoring ============ -->
+  <rect x="30" y="70" width="210" height="610" rx="12" fill="none" stroke="#9fb0c7" stroke-width="1.2" stroke-dasharray="7 5"/>
+  <text class="group" x="48" y="98">Клиенты и мониторинг</text>
+
+  <rect x="50" y="250" width="170" height="64" rx="10" fill="#e6d7f8" stroke="#a17ad0" stroke-width="1.2"/>
+  <text class="box-title" x="135" y="282" text-anchor="middle">Prometheus</text>
+  <text class="box-sub" x="135" y="302" text-anchor="middle">/metrics</text>
+
+  <rect x="50" y="380" width="170" height="64" rx="10" fill="#e9eef6" stroke="#9aa9bd" stroke-width="1.2"/>
+  <text class="box-title" x="135" y="412" text-anchor="middle">HTTP-клиент</text>
+  <text class="box-sub" x="135" y="432" text-anchor="middle">/api/v1/orders</text>
+
+  <rect x="50" y="560" width="170" height="64" rx="10" fill="#d8f1f5" stroke="#6bb8c4" stroke-width="1.2"/>
+  <text class="box-title" x="135" y="592" text-anchor="middle">Jaeger</text>
+  <text class="box-sub" x="135" y="612" text-anchor="middle">OTLP :4318</text>
+
+  <!-- ============ group: order-service ============ -->
+  <rect x="300" y="70" width="236" height="715" rx="12" fill="none" stroke="#4a86d8" stroke-width="1.2" stroke-dasharray="7 5"/>
+  <text class="group" x="318" y="98">order-service</text>
+
+  <rect x="330" y="130" width="176" height="95" rx="10" fill="#cfe4f9" stroke="#5b8fd0" stroke-width="1.2"/>
+  <text class="box-title" x="418" y="170" text-anchor="middle">HTTP API</text>
+  <text class="box-sub" x="418" y="193" text-anchor="middle">handler + service</text>
+
+  <rect x="330" y="255" width="176" height="95" rx="10" fill="#fcf3c5" stroke="#d4b04a" stroke-width="1.2"/>
+  <text class="box-title" x="418" y="295" text-anchor="middle">Publisher</text>
+  <text class="box-sub" x="418" y="318" text-anchor="middle">POLL_INTERVAL</text>
+
+  <rect x="330" y="380" width="176" height="95" rx="10" fill="#fcf3c5" stroke="#d4b04a" stroke-width="1.2"/>
+  <text class="box-title" x="418" y="420" text-anchor="middle">Reaper</text>
+  <text class="box-sub" x="418" y="443" text-anchor="middle">REAPER_AFTER</text>
+
+  <rect x="330" y="505" width="176" height="95" rx="10" fill="#cfe4f9" stroke="#5b8fd0" stroke-width="1.2"/>
+  <text class="box-title" x="418" y="545" text-anchor="middle">gRPC JobService</text>
+  <text class="box-sub" x="418" y="568" text-anchor="middle">ClaimJob / CompleteJob</text>
+
+  <rect x="330" y="645" width="176" height="95" rx="10" fill="#c9eecd" stroke="#63a06a" stroke-width="1.2"/>
+  <text class="box-title" x="418" y="685" text-anchor="middle">Worker</text>
+  <text class="box-sub" x="418" y="708" text-anchor="middle">cmd/worker</text>
+
+  <!-- ============ group: storage ============ -->
+  <rect x="566" y="360" width="370" height="200" rx="12" fill="none" stroke="#9fb0c7" stroke-width="1.2" stroke-dasharray="7 5"/>
+  <text class="group" x="584" y="388">Хранилища</text>
+
+  <path d="M586,420 v80 a80,14 0 0 0 160,0 v-80" fill="#dfe7f0" stroke="#8fa3b8" stroke-width="1.2"/>
+  <ellipse cx="666" cy="420" rx="80" ry="14" fill="#eaf0f7" stroke="#8fa3b8" stroke-width="1.2"/>
+  <text class="box-title" x="666" y="460" text-anchor="middle">PostgreSQL</text>
+  <text class="box-sub" x="666" y="481" text-anchor="middle">orders, integration_jobs</text>
+
+  <path d="M756,420 v80 a80,14 0 0 0 160,0 v-80" fill="#f9d9df" stroke="#d98fa0" stroke-width="1.2"/>
+  <ellipse cx="836" cy="420" rx="80" ry="14" fill="#fde8ec" stroke="#d98fa0" stroke-width="1.2"/>
+  <text class="box-title" x="836" y="460" text-anchor="middle">Redis</text>
+  <text class="box-sub" x="836" y="481" text-anchor="middle">цены, erp:window</text>
+
+  <!-- ============ group: external systems ============ -->
+  <rect x="956" y="60" width="240" height="800" rx="12" fill="none" stroke="#d98b3f" stroke-width="1.2" stroke-dasharray="7 5"/>
+  <text class="group" x="974" y="88">Внешние системы</text>
+
+  <rect x="976" y="130" width="210" height="80" rx="10" fill="#fdf1e3" stroke="#d98b3f" stroke-width="1.2" stroke-dasharray="6 4"/>
+  <text class="box-title" x="1081" y="164" text-anchor="middle">Catalog</text>
+  <text class="box-sub" x="1081" y="186" text-anchor="middle">catalogfake:9091</text>
+
+  <rect x="976" y="240" width="210" height="80" rx="10" fill="#fdf1e3" stroke="#d98b3f" stroke-width="1.2" stroke-dasharray="6 4"/>
+  <text class="box-title" x="1081" y="274" text-anchor="middle">Kafka</text>
+  <text class="box-sub" x="1081" y="296" text-anchor="middle">order.created</text>
+
+  <rect x="976" y="760" width="210" height="80" rx="10" fill="#fdf1e3" stroke="#d98b3f" stroke-width="1.2" stroke-dasharray="6 4"/>
+  <text class="box-title" x="1081" y="794" text-anchor="middle">ERP</text>
+  <text class="box-sub" x="1081" y="816" text-anchor="middle">erpfake:8081</text>
+
+  <!-- ============ arrows ============ -->
+  <line x1="220" y1="282" x2="328" y2="168" stroke="#374151" stroke-width="1.3" marker-end="url(#arrow)"/>
+  <rect x="226" y="207" width="98" height="26" fill="#ffffff"/>
+  <text class="label" x="275" y="225" text-anchor="middle">GET /metrics</text>
+
+  <line x1="220" y1="412" x2="328" y2="200" stroke="#374151" stroke-width="1.3" marker-end="url(#arrow)"/>
+  <rect x="250" y="288" width="50" height="26" fill="#ffffff"/>
+  <text class="label" x="275" y="306" text-anchor="middle">HTTP</text>
+
+  <line x1="328" y1="222" x2="222" y2="588" stroke="#374151" stroke-width="1.3" marker-end="url(#arrow)"/>
+  <rect x="251" y="387" width="50" height="26" fill="#ffffff"/>
+  <text class="label" x="276" y="405" text-anchor="middle">OTLP</text>
+
+  <line x1="328" y1="715" x2="222" y2="612" stroke="#374151" stroke-width="1.3" marker-end="url(#arrow)"/>
+  <rect x="251" y="645" width="50" height="26" fill="#ffffff"/>
+  <text class="label" x="276" y="663" text-anchor="middle">OTLP</text>
+
+  <line x1="506" y1="168" x2="974" y2="165" stroke="#374151" stroke-width="1.3" marker-end="url(#arrow)"/>
+  <rect x="715" y="148" width="52" height="26" fill="#ffffff"/>
+  <text class="label" x="741" y="166" text-anchor="middle">gRPC</text>
+
+  <line x1="506" y1="300" x2="974" y2="285" stroke="#374151" stroke-width="1.3" marker-end="url(#arrow)"/>
+  <rect x="709" y="274" width="65" height="26" fill="#ffffff"/>
+  <text class="label" x="741" y="292" text-anchor="middle">publish</text>
+
+  <line x1="506" y1="222" x2="586" y2="440" stroke="#374151" stroke-width="1.3" marker-end="url(#arrow)"/>
+
+  <line x1="506" y1="200" x2="796" y2="415" stroke="#374151" stroke-width="1.3" marker-end="url(#arrow)"/>
+
+  <line x1="506" y1="430" x2="586" y2="470" stroke="#374151" stroke-width="1.3" marker-end="url(#arrow)"/>
+
+  <line x1="506" y1="715" x2="974" y2="795" stroke="#374151" stroke-width="1.3" marker-end="url(#arrow)"/>
+  <rect x="692" y="737" width="98" height="26" fill="#ffffff"/>
+  <text class="label" x="741" y="755" text-anchor="middle">POST /orders</text>
+
+  <line x1="418" y1="645" x2="418" y2="602" stroke="#374151" stroke-width="1.3" marker-end="url(#arrow)"/>
+  <rect x="426" y="610" width="100" height="26" fill="#ffffff"/>
+  <text class="label" x="432" y="628">claim / complete</text>
+</svg>

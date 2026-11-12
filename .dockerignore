@@ -1,0 +1,15 @@
+# Контекст сборки — весь репозиторий, но мусор в образ не нужен.
+.git
+.gitignore
+.gitlab-ci.yml
+bin/
+.env
+.env.*
+*.log
+deploy/
+docs/
+tmp/
+
+# Тесты и миграции для сборки бинарей не требуются.
+**/*_test.go
+migrations/

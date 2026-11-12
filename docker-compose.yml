@@ -1,7 +1,9 @@
+# Финальный стек: одной командой `docker compose up -d --build`.
+# Миграции — отдельным one-off контейнером из профиля tools (`make migrate-up`).
+
 services:
   postgres:
     image: postgres:16-alpine
-    profiles: ["tools"]
     environment:
       POSTGRES_USER: orders
       POSTGRES_PASSWORD: orders
@@ -16,6 +18,137 @@ services:
       timeout: 3s
       retries: 15
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      # Два слушателя: внутри сети — redpanda:9092, с хоста — localhost:19092.
+      # Один advertise-адрес здесь не годится: контейнеры получили бы метаданные
+      # с localhost и не смогли бы достучаться до брокера.
+      - --kafka-addr=INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:19092
+      - --advertise-kafka-addr=INTERNAL://redpanda:9092,EXTERNAL://localhost:19092
+    ports:
+      - "19092:19092"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk topic list --brokers 127.0.0.1:9092 >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  catalogfake:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BINARY: catalogfake
+    image: order-service/catalogfake:dev
+    ports:
+      - "9091:9091" # gRPC
+      - "8084:8084" # HTTP: /products, /prices
+
+  erpfake:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BINARY: erpfake
+    image: order-service/erpfake:dev
+    ports:
+      - "8081:8081"
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # UI
+      - "4318:4318"   # OTLP HTTP
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BINARY: api
+    image: order-service/api:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      catalogfake:
+        condition: service_started
+      erpfake:
+        condition: service_started
+      jaeger:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgres://orders:orders@postgres:5432/orders?sslmode=disable
+      HTTP_ADDR: ":8080"
+      GRPC_ADDR: ":9090"
+      CATALOG_GRPC_ADDR: catalogfake:9091
+      REDIS_ADDR: redis:6379
+      PRICE_CACHE_TTL: 60s
+      ERP_BASE_URL: http://erpfake:8081
+      ERP_TIMEOUT: 15s
+      REAPER_AFTER: 30s
+      REAPER_EVERY: 10s
+      KAFKA_ADDR: redpanda:9092
+      KAFKA_TOPIC: order.created
+      POLL_INTERVAL: 1s
+      POLL_IDLE: 1s
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    ports:
+      - "8080:8080" # HTTP
+      - "9090:9090" # gRPC JobService
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BINARY: worker
+    image: order-service/worker:dev
+    depends_on:
+      api:
+        condition: service_started
+      erpfake:
+        condition: service_started
+      jaeger:
+        condition: service_started
+    environment:
+      JOBS_ADDR: api:9090
+      ERP_BASE_URL: http://erpfake:8081
+      # Служебный HTTP: /healthz, /metrics и pprof.
+      WORKER_PPROF_ADDR: ":8082"
+      POLL_IDLE: 1s
+      RPC_DEADLINE: 5s
+      SHUTDOWN_TIMEOUT: 20s
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    ports:
+      - "8082:8082"
+    # Больше SHUTDOWN_TIMEOUT: docker успевает дождаться штатного выхода.
+    stop_grace_period: 30s
+
+  # One-off для миграций: не поднимается вместе со стеком (профиль tools),
+  # запускается через `make migrate-up` / `docker compose run --rm migrate`.
   migrate:
     image: migrate/migrate:v4.18.1
     profiles: ["tools"]
@@ -28,36 +161,6 @@ services:
       - "-path=/migrations"
       - "-database=postgres://orders:orders@postgres:5432/orders?sslmode=disable"
       - "up"
-
-  redis:
-    image: redis:7-alpine
-    profiles: ["tools"]
-    ports:
-      - "6379:6379"
-
-  redpanda:
-    image: redpandadata/redpanda:v24.2.7
-    profiles: ["tools"]
-    command:
-      - redpanda
-      - start
-      - --smp=1
-      - --overprovisioned
-      - --node-id=0
-      - --check=false
-      - --kafka-addr=PLAINTEXT://0.0.0.0:19092
-      - --advertise-kafka-addr=PLAINTEXT://localhost:19092
-    ports:
-      - "19092:19092"
-
-  jaeger:
-    image: jaegertracing/all-in-one:1.60.0
-    profiles: ["tools"]
-    environment:
-      COLLECTOR_OTLP_ENABLED: "true"
-    ports:
-      - "16686:16686" # UI
-      - "4318:4318"   # OTLP HTTP
 
 volumes:
   pgdata:
