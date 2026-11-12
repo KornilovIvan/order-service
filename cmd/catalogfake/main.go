@@ -138,7 +138,7 @@ func newHTTPHandler() http.Handler {
 			http.Error(w, `{"error":"product not found"}`, http.StatusNotFound)
 			return
 		}
-		writeJSON(w, productJSON{ID: p.ID, Name: p.Name, Price: p.Price})
+		writeJSON(w, productJSON(p))
 	})
 
 	// GET /prices/{id} — текущая цена товара, JSON-строка: "100.00".

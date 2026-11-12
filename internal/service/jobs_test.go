@@ -37,7 +37,7 @@ func jobsOf(t *testing.T, db interface {
 	if err != nil {
 		t.Fatalf("select jobs: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []storedJob
 	for rows.Next() {
 		var j storedJob

@@ -14,10 +14,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	jobsv1 "order-service/internal/gen/jobs/v1"
+	"order-service/internal/metricsclient"
 	"order-service/internal/telemetry"
 	"order-service/internal/worker"
 )
@@ -57,7 +59,7 @@ func main() {
 	log.Printf("worker: id=%s jobs=%s erp=%s pprof=%s poll_idle=%s claim_rpc=%s shutdown=%s otlp=%s",
 		workerID, jobsAddr, erpBaseURL, pprofAddr, cfg.PollIdle, cfg.ClaimRPC, cfg.Shutdown, otlpEndpoint)
 
-	worker.New(jobsv1.NewJobServiceClient(conn), cfg).Run(ctx)
+	worker.New(metricsclient.Wrap(jobsv1.NewJobServiceClient(conn)), cfg).Run(ctx)
 
 	log.Printf("worker: stopped")
 }
@@ -70,6 +72,7 @@ func servePprof(addr string) {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)

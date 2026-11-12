@@ -1,5 +1,6 @@
 stages:
   - test
+  - lint
 
 test:
   stage: test
@@ -7,3 +8,15 @@ test:
   script:
     - go version
     - go test ./...
+
+lint:
+  stage: lint
+  image: golangci/golangci-lint:v1.64.8
+  # go.mod требует go 1.26, а образ golangci-lint собран с более старым Go:
+  # разрешаем автоматическую подкачку нужного тулчейна.
+  variables:
+    GOTOOLCHAIN: auto
+  script:
+    - golangci-lint --version
+    - go version
+    - golangci-lint run --timeout 5m ./...

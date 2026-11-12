@@ -25,6 +25,7 @@ import (
 	"order-service/internal/handler"
 	"order-service/internal/jobs"
 	"order-service/internal/limiter"
+	"order-service/internal/metrics"
 	"order-service/internal/publisher"
 	"order-service/internal/repository"
 	"order-service/internal/service"
@@ -107,7 +108,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("api: listen grpc %s: %v", grpcAddr, err)
 	}
-	grpcSrv := grpc.NewServer(grpc.UnaryInterceptor(telemetry.UnaryServerInterceptor("order-service/api")))
+	grpcSrv := grpc.NewServer(grpc.ChainUnaryInterceptor(
+		// Сначала trace: ошибки и тайминги попадают и в span, и в метрику.
+		telemetry.UnaryServerInterceptor("order-service/api"),
+		metrics.UnaryServerInterceptor(),
+	))
 	jobsv1.RegisterJobServiceServer(grpcSrv, jobs.New(repo, jobIdle))
 	reflection.Register(grpcSrv)
 
