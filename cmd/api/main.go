@@ -117,17 +117,9 @@ func main() {
 		defer close(workerDone)
 		eventsWorker.Run(ctx)
 	}()
-	// Встроенный воркер можно выключить (INLINE_JOBS=false), если задания
-	// обрабатывает внешний процесс cmd/worker: так они не конкурируют за очередь.
-	jobsDone := make(chan struct{})
-	if envOr("INLINE_JOBS", "true") == "false" {
-		close(jobsDone)
-	} else {
-		go func() {
-			defer close(jobsDone)
-			svc.RunJobs(ctx, jobIdle)
-		}()
-	}
+
+	// Задания забирает только внешний процесс cmd/worker (gRPC ClaimJob):
+	// в API горутины опроса очереди нет, иначе захватчиков было бы два.
 	reaperDone := make(chan struct{})
 	go func() {
 		defer close(reaperDone)
@@ -152,7 +144,6 @@ func main() {
 	}
 
 	<-workerDone
-	<-jobsDone
 	<-reaperDone
 
 	// gRPC останавливаем после HTTP: воркер успевает дописать результат задания.
