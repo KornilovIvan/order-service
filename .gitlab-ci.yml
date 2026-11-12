@@ -5,6 +5,32 @@ stages:
 test:
   stage: test
   image: golang:1.26
+
+  # Интеграционным тестам нужен реальный PostgreSQL: они работают с
+  # настоящими таблицами orders/order_items/integration_jobs. Redis не нужен —
+  # в тестах лимитера и кэша используется miniredis.
+  services:
+    - name: postgres:16-alpine
+      alias: postgres
+
+  variables:
+    POSTGRES_USER: orders
+    POSTGRES_PASSWORD: orders
+    POSTGRES_DB: orders
+    # Тесты читают DATABASE_URL; хост — алиас сервиса, а не localhost.
+    DATABASE_URL: postgres://orders:orders@postgres:5432/orders?sslmode=disable
+
+  before_script:
+    # psql нужен только чтобы применить миграции перед тестами.
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends postgresql-client > /dev/null
+    # Сервис стартует параллельно с джобой. pg_isready здесь не годится: он
+    # отвечает «готов» и во время initdb, когда сервер ещё не принимает
+    # соединения, поэтому ждём реальный SELECT.
+    - until psql "$DATABASE_URL" -tAc 'select 1' > /dev/null 2>&1; do sleep 1; done
+    # Та же схема, что и в проде: все up-миграции по порядку.
+    - for f in migrations/*.up.sql; do psql "$DATABASE_URL" -q -v ON_ERROR_STOP=1 -f "$f"; done
+
   script:
     - go version
     - go test ./...
