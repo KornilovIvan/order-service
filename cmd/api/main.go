@@ -28,6 +28,7 @@ import (
 	"order-service/internal/publisher"
 	"order-service/internal/repository"
 	"order-service/internal/service"
+	"order-service/internal/telemetry"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -79,6 +80,12 @@ func main() {
 	defer func() { _ = events.Close() }()
 	eventsWorker := publisher.NewWorker(repo, events, pollInterval, 50)
 	jobIdle := durationEnv("POLL_IDLE", time.Second)
+	otlpEndpoint := envOr("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+	shutdownTracing, err := telemetry.Init(context.Background(), "order-service-api", otlpEndpoint)
+	if err != nil {
+		log.Fatalf("api: tracing: %v", err)
+	}
+	defer func() { _ = shutdownTracing(context.Background()) }()
 
 	svc := service.NewOrders(repo, priceCache, erp.New(erpBaseURL, erpTimeout))
 	erpLimit := intEnv("ERP_LIMIT", 0)
@@ -100,7 +107,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("api: listen grpc %s: %v", grpcAddr, err)
 	}
-	grpcSrv := grpc.NewServer()
+	grpcSrv := grpc.NewServer(grpc.UnaryInterceptor(telemetry.UnaryServerInterceptor("order-service/api")))
 	jobsv1.RegisterJobServiceServer(grpcSrv, jobs.New(repo, jobIdle))
 	reflection.Register(grpcSrv)
 
@@ -127,8 +134,8 @@ func main() {
 	}()
 
 	go func() {
-		log.Printf("api: listening on %s, grpc on %s, catalog at %s, redis at %s (price ttl %s), erp at %s (limit %d / window %s, reaper after %s / every %s), jobs idle %s, kafka %s/%s",
-			httpAddr, grpcAddr, catalogAddr, redisAddr, priceCacheTTL, erpBaseURL, erpLimit, erpWindow, reaperAfter, reaperEvery, jobIdle, strings.Join(kafkaAddrs, ","), kafkaTopic)
+		log.Printf("api: listening on %s, grpc on %s, catalog at %s, redis at %s (price ttl %s), erp at %s (limit %d / window %s, reaper after %s / every %s), jobs idle %s, kafka %s/%s, otlp %s",
+			httpAddr, grpcAddr, catalogAddr, redisAddr, priceCacheTTL, erpBaseURL, erpLimit, erpWindow, reaperAfter, reaperEvery, jobIdle, strings.Join(kafkaAddrs, ","), kafkaTopic, otlpEndpoint)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("api: serve: %v", err)
 		}

@@ -50,5 +50,14 @@ services:
     ports:
       - "19092:19092"
 
+  jaeger:
+    image: jaegertracing/all-in-one:1.60.0
+    profiles: ["tools"]
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # UI
+      - "4318:4318"   # OTLP HTTP
+
 volumes:
   pgdata:

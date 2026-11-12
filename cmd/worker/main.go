@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	jobsv1 "order-service/internal/gen/jobs/v1"
+	"order-service/internal/telemetry"
 	"order-service/internal/worker"
 )
 
@@ -26,6 +27,13 @@ func main() {
 	erpBaseURL := envOr("ERP_BASE_URL", "http://localhost:8081")
 	pprofAddr := envOr("WORKER_PPROF_ADDR", ":8082")
 	workerID := envOr("WORKER_ID", defaultWorkerID())
+	otlpEndpoint := envOr("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+
+	shutdownTracing, err := telemetry.Init(context.Background(), "order-service-worker", otlpEndpoint)
+	if err != nil {
+		log.Fatalf("worker: tracing: %v", err)
+	}
+	defer func() { _ = shutdownTracing(context.Background()) }()
 
 	cfg := worker.Config{
 		WorkerID:   workerID,
@@ -46,8 +54,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("worker: id=%s jobs=%s erp=%s pprof=%s poll_idle=%s claim_rpc=%s shutdown=%s",
-		workerID, jobsAddr, erpBaseURL, pprofAddr, cfg.PollIdle, cfg.ClaimRPC, cfg.Shutdown)
+	log.Printf("worker: id=%s jobs=%s erp=%s pprof=%s poll_idle=%s claim_rpc=%s shutdown=%s otlp=%s",
+		workerID, jobsAddr, erpBaseURL, pprofAddr, cfg.PollIdle, cfg.ClaimRPC, cfg.Shutdown, otlpEndpoint)
 
 	worker.New(jobsv1.NewJobServiceClient(conn), cfg).Run(ctx)
 

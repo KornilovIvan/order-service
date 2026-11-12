@@ -15,9 +15,14 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	jobsv1 "order-service/internal/gen/jobs/v1"
+	"order-service/internal/telemetry"
 )
 
 const (
@@ -42,6 +47,7 @@ type Worker struct {
 	client jobsv1.JobServiceClient
 	http   *http.Client
 	cfg    Config
+	tracer trace.Tracer
 
 	budget shutdownBudget
 }
@@ -60,7 +66,7 @@ func New(client jobsv1.JobServiceClient, cfg Config) *Worker {
 		// Без Timeout: длительность Submit ограничивает контекст (бюджет shutdown).
 		cfg.HTTPClient = &http.Client{}
 	}
-	return &Worker{client: client, http: cfg.HTTPClient, cfg: cfg}
+	return &Worker{client: client, http: cfg.HTTPClient, cfg: cfg, tracer: otel.Tracer("order-service/worker")}
 }
 
 // Run крутит цикл до отмены ctx. По SIGTERM новые задания не берутся:
@@ -73,6 +79,7 @@ func (w *Worker) Run(ctx context.Context) {
 			return
 		}
 
+		claimStarted := time.Now()
 		resp, err := w.claim(ctx)
 		if ctx.Err() != nil {
 			return
@@ -95,7 +102,20 @@ func (w *Worker) Run(ctx context.Context) {
 		}
 
 		emptyWithoutRetry = false
-		w.processJob(ctx, job)
+
+		// Trace начинается с ClaimJob. Span создаётся после успешного захвата
+		// (иначе пустые опросы плодили бы трейсы), но с временем начала RPC.
+		jobCtx, claimSpan := w.tracer.Start(ctx, "ClaimJob",
+			trace.WithSpanKind(trace.SpanKindClient),
+			trace.WithTimestamp(claimStarted),
+			trace.WithAttributes(
+				attribute.Int64("job.id", job.GetId()),
+				attribute.Int64("order.id", job.GetOrderId()),
+				attribute.String("correlation_id", job.GetCorrelationId()),
+			),
+		)
+		w.processJob(jobCtx, job)
+		claimSpan.End()
 		if ctx.Err() != nil {
 			return
 		}
@@ -134,7 +154,7 @@ func (w *Worker) claim(ctx context.Context) (*jobsv1.ClaimResponse, error) {
 func (w *Worker) processJob(ctx context.Context, job *jobsv1.Job) {
 	log.Printf("worker: job %d order %d correlation_id=%s", job.GetId(), job.GetOrderId(), job.GetCorrelationId())
 
-	submitCtx, cancelSubmit := context.WithCancel(context.Background())
+	submitCtx, cancelSubmit := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelSubmit()
 
 	submitFinished := make(chan struct{})
@@ -158,7 +178,7 @@ func (w *Worker) processJob(ctx context.Context, job *jobsv1.Job) {
 		}
 	}()
 
-	status, body, submitErr := w.submit(submitCtx, job)
+	status, body, submitErr := w.submitSpan(submitCtx, job)
 	stopWatch()
 
 	errText := ""
@@ -177,10 +197,13 @@ func (w *Worker) processJob(ctx context.Context, job *jobsv1.Job) {
 		return
 	}
 
-	completeCtx, cancelComplete := context.WithTimeout(context.Background(), completeTimeout)
+	completeCtx, cancelComplete := context.WithTimeout(context.WithoutCancel(ctx), completeTimeout)
 	defer cancelComplete()
 
-	if _, err := w.client.CompleteJob(completeCtx, &jobsv1.CompleteRequest{
+	completeCtx, completeSpan := w.tracer.Start(completeCtx, "CompleteJob", trace.WithSpanKind(trace.SpanKindClient))
+	defer completeSpan.End()
+
+	if _, err := w.client.CompleteJob(telemetry.InjectGRPC(completeCtx), &jobsv1.CompleteRequest{
 		JobId:        job.GetId(),
 		LockedAt:     job.GetLockedAt(),
 		LeaseToken:   job.GetLeaseToken(),
@@ -188,12 +211,34 @@ func (w *Worker) processJob(ctx context.Context, job *jobsv1.Job) {
 		ResponseBody: body,
 		Error:        errText,
 	}); err != nil {
+		completeSpan.RecordError(err)
+		completeSpan.SetStatus(codes.Error, err.Error())
 		// Задание останется in_progress — его восстановит reaper.
 		log.Printf("worker: complete job %d: %v", job.GetId(), err)
 		return
 	}
 
 	log.Printf("worker: job %d done, http_status=%d correlation_id=%s", job.GetId(), status, job.GetCorrelationId())
+}
+
+// submitSpan оборачивает Submit в span erp.Submit.
+func (w *Worker) submitSpan(ctx context.Context, job *jobsv1.Job) (int, string, error) {
+	ctx, span := w.tracer.Start(ctx, "erp.Submit",
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			attribute.Int64("job.id", job.GetId()),
+			attribute.Int64("order.id", job.GetOrderId()),
+		),
+	)
+	defer span.End()
+
+	status, body, err := w.submit(ctx, job)
+	span.SetAttributes(attribute.Int("http.status_code", status))
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return status, body, err
 }
 
 // submit отправляет заказ в ERP. Таймаутом управляет context; тело ответа
@@ -210,6 +255,8 @@ func (w *Worker) submit(ctx context.Context, job *jobsv1.Job) (int, string, erro
 	if cid := job.GetCorrelationId(); cid != "" {
 		req.Header.Set("X-Correlation-ID", cid)
 	}
+	// traceparent: ERP fake его игнорирует, но реальный сервис продолжит цепочку.
+	telemetry.InjectHTTP(ctx, req.Header)
 
 	resp, err := w.http.Do(req)
 	if err != nil {
